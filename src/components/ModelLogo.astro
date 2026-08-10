@@ -1,0 +1,19 @@
+---
+interface Props {
+  name: string;
+  providerName: string;
+  logoUrl?: string | null;
+  hero?: boolean;
+}
+
+const { name, providerName, logoUrl, hero = false } = Astro.props;
+// The data contract may only point at version-controlled provider assets.
+// Rejecting every other URL makes an external image request impossible even
+// if a stale or malformed database value reaches the component.
+const logo = logoUrl?.startsWith("/providers/") ? logoUrl : null;
+const fallback = providerName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || name.slice(0, 1).toUpperCase();
+---
+<span class:list={["logo-mark", { "logo-mark--hero": hero }]}>
+  <span class="logo-fallback" aria-hidden="true">{fallback}</span>
+  {logo && <img src={logo} alt={`${providerName} logo`} loading={hero ? "eager" : "lazy"} />}
+</span>

@@ -1,0 +1,134 @@
+---
+import BaseLayout from "../../../components/BaseLayout.astro";
+import Header from "../../../components/Header.astro";
+import AuthControl from "../../../components/islands/AuthControl";
+import { HttpError } from "../../../lib/http";
+import { getRuntimeEnv } from "../../../lib/runtime";
+import { getCurrentIdentity, isDevelopmentMockEnabled } from "../../../services/auth";
+import { getCliTurnstileChallengeForBrowser, type BrowserCliTurnstileChallenge } from "../../../services/cli-turnstile";
+
+export const prerender = false;
+Astro.response.headers.set("Cache-Control", "private, no-store");
+
+const env = getRuntimeEnv(Astro.locals);
+const identity = await getCurrentIdentity(Astro.request, env);
+const challengeId = Astro.params.id ?? "";
+let challenge: BrowserCliTurnstileChallenge | null = null;
+let challengeError: string | null = null;
+
+if (identity && challengeId) {
+  try {
+    challenge = await getCliTurnstileChallengeForBrowser(env, challengeId, identity.userId);
+  } catch (error) {
+    if (error instanceof HttpError) challengeError = error.code;
+    else throw error;
+  }
+}
+
+const pending = challenge?.status === "pending";
+const developmentMock = isDevelopmentMockEnabled(Astro.request, env);
+const showTurnstile = Boolean(identity && pending && challenge?.requiresTurnstile && env.TURNSTILE_SITE_KEY);
+---
+<BaseLayout title="Verify an IsAIokay.com CLI Report" description="Complete browser verification for an AI coding model rating submitted through the IsAIokay.com CLI." noindex>
+  <Header />
+  <main id="main-content" class="mx-auto max-w-xl px-5 py-14 sm:px-8">
+    <p class="text-xs font-bold uppercase tracking-[.18em] text-[#63708b]">CLI verification</p>
+    <h1 class="mt-3 text-4xl font-extrabold tracking-[-.055em] text-[#151b2b]">Verify this report</h1>
+    <p class="mt-4 leading-7 text-[#59637a]">This confirms that the CLI report came from your account. Your prompt, code, repository, session ID, and rating details are not shown or stored on this page.</p>
+
+    {!challengeId ? (
+      <section class="mt-8 rounded-2xl border border-[#dfe4ef] bg-white p-6 shadow-sm">
+        <h2 class="text-lg font-bold">Invalid verification link</h2>
+        <p class="mt-2 text-sm leading-6 text-[#667087]">Return to the CLI and submit the report again to receive a new link.</p>
+      </section>
+    ) : !identity ? (
+      <section class="mt-8 rounded-2xl border border-[#dfe4ef] bg-white p-6 shadow-sm">
+        <h2 class="text-lg font-bold">Sign in to continue</h2>
+        <p class="mt-2 text-sm leading-6 text-[#667087]">Sign in with the same GitHub account that connected this CLI. You will return to this verification link after sign-in.</p>
+        <div class="mt-5"><AuthControl client:load authenticated={false} name={null} image={null} /></div>
+      </section>
+    ) : challengeError === "cli_verification_wrong_user" ? (
+      <section class="mt-8 rounded-2xl border border-[#dfe4ef] bg-white p-6 shadow-sm">
+        <h2 class="text-lg font-bold">Different account</h2>
+        <p class="mt-2 text-sm leading-6 text-[#667087]">This link belongs to another account. Sign out and use the account that connected the CLI.</p>
+        <div class="mt-5"><AuthControl client:load authenticated={true} name={identity.name} image={identity.image} /></div>
+      </section>
+    ) : !challenge ? (
+      <section class="mt-8 rounded-2xl border border-[#dfe4ef] bg-white p-6 shadow-sm">
+        <h2 class="text-lg font-bold">Verification unavailable</h2>
+        <p class="mt-2 text-sm leading-6 text-[#667087]">This verification link is invalid or has been cleaned up. Return to the CLI and submit the report again.</p>
+      </section>
+    ) : challenge.status === "verified" ? (
+      <section class="mt-8 rounded-2xl border border-[#b8e4c6] bg-[#f2fbf4] p-6 shadow-sm">
+        <h2 class="text-lg font-bold text-[#17643a]">Browser verification complete</h2>
+        <p class="mt-2 text-sm leading-6 text-[#397451]">Return to the terminal. The CLI will detect the proof and retry your report automatically.</p>
+      </section>
+    ) : challenge.status === "consumed" ? (
+      <section class="mt-8 rounded-2xl border border-[#b8e4c6] bg-[#f2fbf4] p-6 shadow-sm">
+        <h2 class="text-lg font-bold text-[#17643a]">Verification used</h2>
+        <p class="mt-2 text-sm leading-6 text-[#397451]">The CLI has used this one-time proof. You can return to the terminal.</p>
+      </section>
+    ) : challenge.status === "expired" ? (
+      <section class="mt-8 rounded-2xl border border-[#f0c6bd] bg-[#fff8f6] p-6 shadow-sm">
+        <h2 class="text-lg font-bold text-[#9b3428]">Verification link expired</h2>
+        <p class="mt-2 text-sm leading-6 text-[#8a5149]">Return to the CLI and submit the report again to receive a fresh link.</p>
+      </section>
+    ) : (
+      <section class="mt-8 rounded-2xl border border-[#dfe4ef] bg-white p-6 shadow-sm">
+        <h2 class="text-lg font-bold">Confirm you are human</h2>
+        <p class="mt-2 text-sm leading-6 text-[#667087]">This proof expires at {new Date(challenge.expiresAt).toLocaleTimeString()}. It can be used by this CLI installation only once.</p>
+        {showTurnstile && <div id="turnstile-widget" class="mt-5"></div>}
+        {challenge.requiresTurnstile && !showTurnstile && !developmentMock && <p class="mt-5 rounded-xl bg-[#fff8f6] p-4 text-sm text-[#8a5149]">Verification is temporarily unavailable. Return to the CLI and try again later.</p>}
+        <button id="complete-verification" class="button-dark mt-5 w-full justify-center" type="button" disabled={challenge.requiresTurnstile && !showTurnstile && !developmentMock}>Complete verification</button>
+        <p id="verification-result" class="mt-4 min-h-6 text-sm text-[#59637a]" role="status" aria-live="polite"></p>
+      </section>
+    )}
+  </main>
+</BaseLayout>
+
+{showTurnstile && <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>}
+{identity && pending && challenge && <script is:inline define:vars={{ challengeId, requiresTurnstile: challenge.requiresTurnstile, turnstileSiteKey: env.TURNSTILE_SITE_KEY ?? null, developmentMock }}>
+  const button = document.querySelector("#complete-verification");
+  const result = document.querySelector("#verification-result");
+  let widgetId = null;
+  const turnstileApi = () => window.turnstile;
+
+  const renderTurnstile = () => {
+    if (!requiresTurnstile || !turnstileSiteKey || widgetId !== null) return;
+    const api = turnstileApi();
+    if (!api) return;
+    widgetId = api.render("#turnstile-widget", { sitekey: turnstileSiteKey, theme: "light" });
+  };
+  window.addEventListener("load", renderTurnstile);
+  window.setTimeout(renderTurnstile, 150);
+
+  button?.addEventListener("click", async () => {
+    if (!button || !result) return;
+    button.disabled = true;
+    result.textContent = "Verifying…";
+    try {
+      let turnstileToken;
+      if (requiresTurnstile) {
+        if (developmentMock) turnstileToken = "mock-turnstile-pass";
+        else {
+          const token = widgetId === null ? "" : turnstileApi()?.getResponse(widgetId);
+          if (!token) throw new Error("Complete the verification check first.");
+          turnstileToken = token;
+        }
+      }
+      const response = await fetch(`/api/cli/challenges/${challengeId}/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ turnstileToken })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.error?.message ?? "Verification failed.");
+      result.textContent = "Verified. Return to the terminal; the CLI will retry automatically.";
+      button.textContent = "Verified";
+    } catch (error) {
+      result.textContent = error instanceof Error ? error.message : "Verification failed.";
+      button.disabled = false;
+      if (widgetId !== null) turnstileApi()?.reset(widgetId);
+    }
+  });
+</script>}

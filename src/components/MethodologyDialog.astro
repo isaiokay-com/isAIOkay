@@ -1,0 +1,33 @@
+<section id="methodology" class="methodology-section" aria-labelledby="methodology-title">
+  <div class="page-inner methodology-inner">
+    <header class="methodology-heading">
+      <h2 id="methodology-title">Scoring methodology</h2>
+      <p>Developer Signal rewards a strong recent experience only when enough independent evidence supports it. The scoring specification lives here with the ranking it explains.</p>
+    </header>
+
+    <div class="methodology-grid">
+      <section>
+        <header><span>1</span><h3>Weighted rating</h3></header>
+        <p>Each eligible rating is normalized to a 0–100 scale, then combined across two deliberately distinct measurements.</p>
+        <dl><div><dt>Result quality</dt><dd>70%</dd></div><div><dt>Usage efficiency</dt><dd>30%</dd></div></dl>
+        <code>1 → 0 · 2 → 25 · 3 → 50 · 4 → 75 · 5 → 100</code>
+      </section>
+      <section>
+        <header><span>2</span><h3>Confidence and breadth</h3></header>
+        <p>Bayesian stabilization keeps sparse evidence cautious while independent developer participation strengthens the signal.</p>
+        <dl><div><dt>Evidence weight</dt><dd><code>recency × trust × (1 − fraud risk) × duplicate adjustment</code></dd></div><div><dt>Moderation</dt><dd>Excluded reports contribute nothing.</dd></div></dl>
+      </section>
+      <section>
+        <header><span>3</span><h3>Recency and guardrails</h3></header>
+        <p>Newer experience matters most, with safeguards for low-signal periods and documented model releases.</p>
+        <dl><div><dt>Live recency</dt><dd><code>2 ^ (−age in days / half-life days)</code></dd></div><div><dt>Half-life</dt><dd>Configurable 14 days, with no midnight reset.</dd></div><div><dt>Regression</dt><dd>Requires current confidence and a qualified release baseline.</dd></div></dl>
+      </section>
+    </div>
+
+    <p class="signal-formula" aria-label="Developer Signal equals 72 percent weighted rating plus 18 percent confidence plus 10 percent independent developer breadth">
+      <strong><b>72%</b> weighted rating</strong><span aria-hidden="true">+</span><strong><b>18%</b> confidence</strong><span aria-hidden="true">+</span><strong><b>10%</b> breadth</strong>
+    </p>
+
+    <p class="methodology-note"><strong>Note:</strong> Only models are ranked. Coding agents such as Codex, Claude Code, Cursor, and OpenCode remain optional report context. Community ratings describe developer experience, not an objective benchmark or provider intent.</p>
+  </div>
+</section>

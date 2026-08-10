@@ -1,0 +1,25 @@
+---
+import BaseLayout from "../components/BaseLayout.astro";
+import Header from "../components/Header.astro";
+import AdminModeration from "../components/islands/AdminModeration";
+import { allActiveItems, listAdminReports, listCatalogCandidates } from "../db/repositories";
+import { getRuntimeEnv } from "../lib/runtime";
+import { requireAdministrator } from "../services/auth";
+
+export const prerender = false;
+Astro.response.headers.set("Cache-Control", "private, no-store");
+const env = getRuntimeEnv(Astro.locals);
+let administrator;
+try {
+  administrator = await requireAdministrator(Astro.request, env);
+} catch {
+  return Astro.redirect("/");
+}
+const reports = await listAdminReports(env);
+const items = await allActiveItems(env);
+const candidates = await listCatalogCandidates(env, "pending");
+---
+<BaseLayout title="Moderation Admin | IsAIokay.com" description="Protected IsAIokay.com moderation workspace." noindex>
+  <Header />
+  <main class="px-5 py-7 sm:px-8"><p class="eyebrow mb-2 text-xs text-[var(--accent)]">Protected workspace</p><div class="mb-6 flex flex-wrap items-end justify-between gap-3"><div><h1 class="m-0 text-3xl font-extrabold tracking-[-.055em]">Moderation</h1><p class="mb-0 text-sm text-[var(--muted)]">Signed in as {administrator.name}. Release references, catalog decisions, exclusions, and restores are audit logged.</p></div><a class="button-light" href="/">View public rankings</a></div><AdminModeration client:load initialReports={reports} initialItems={items} initialCandidates={candidates} /></main>
+</BaseLayout>

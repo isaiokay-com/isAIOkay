@@ -1,0 +1,14 @@
+{
+  "extends": "astro/tsconfigs/strict",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": false,
+    "types": ["@cloudflare/workers-types", "vitest/globals"]
+  },
+  "include": ["src", "test", "e2e", "better-auth.cli.ts", "drizzle.config.ts", "vitest*.config.ts", "playwright.config.ts", "astro.config.mjs"]
+}

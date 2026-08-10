@@ -1,0 +1,290 @@
+---
+import BaseLayout from "../components/BaseLayout.astro";
+import Header from "../components/Header.astro";
+import Intro from "../components/Intro.astro";
+import RankingShell from "../components/RankingShell.astro";
+import "../styles/landing.css";
+import MethodologyDialog from "../components/MethodologyDialog.astro";
+import FeedbackDialog from "../components/islands/FeedbackDialog";
+import { loadPublicRanking } from "../lib/cache";
+import { compareRecommendedRanking, recommendedRankingValue } from "../lib/ranking";
+import { getRuntimeEnv } from "../lib/runtime";
+import { listActiveAgentOptions } from "../db/repositories";
+import { HOME_PAGE_DESCRIPTION, HOME_PAGE_TITLE } from "../lib/seo";
+
+export const prerender = false;
+
+Astro.response.headers.set("Cache-Control", "public, max-age=60, s-maxage=300");
+
+const params = new URL(Astro.request.url).searchParams;
+const requestedPeriod = params.get("period");
+const period = requestedPeriod === "24h" || requestedPeriod === "7d" ? requestedPeriod : "live";
+const supportedSorts = ["recommended", "result", "usage", "improving", "degrading"] as const;
+const sort = supportedSorts.includes(params.get("sort") as typeof supportedSorts[number]) ? params.get("sort") as typeof supportedSorts[number] : "recommended";
+const env = getRuntimeEnv(Astro.locals);
+const [{ payload }, agents] = await Promise.all([loadPublicRanking(env, period), listActiveAgentOptions(env)]);
+const recommendedValue = (item: typeof payload.items[number]) => recommendedRankingValue(item);
+const sortValue = (item: typeof payload.items[number]) => {
+  switch (sort) {
+    case "result": return item.resultQualityScore;
+    case "usage": return item.usageEfficiencyScore;
+    case "improving": return item.change;
+    case "degrading": return (item.possibleDegradationSinceRelease ? 100 : 0) - item.change;
+    // Report volume is evidence, not a ranking criterion. Recommended blends
+    // community outcome with confidence, preserving the utility's purpose.
+    default: return recommendedValue(item);
+  }
+};
+const items = [...payload.items].sort((a, b) => sort === "recommended"
+  ? compareRecommendedRanking(a, b)
+  : sortValue(b) - sortValue(a) || b.confidence - a.confidence || a.name.localeCompare(b.name));
+const requestedItem = params.get("item");
+const selectedSlug = requestedItem && items.some((item) => item.slug === requestedItem) ? requestedItem : null;
+const requestedFeedback = params.get("feedback");
+const feedbackItem = requestedFeedback && payload.items.find((item) => item.slug === requestedFeedback) ? requestedFeedback : null;
+const pageTitle = HOME_PAGE_TITLE;
+const pageDescription = HOME_PAGE_DESCRIPTION;
+const pageUrl = "https://isaiokay.com/";
+const structuredData = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": `${pageUrl}#organization`,
+      name: "IsAIokay.com",
+      url: pageUrl,
+      logo: {
+        "@type": "ImageObject",
+        url: `${pageUrl}logo-lockup-blue.png`
+      }
+    },
+    {
+      "@type": "WebSite",
+      "@id": `${pageUrl}#website`,
+      name: "IsAIokay.com",
+      url: pageUrl,
+      description: pageDescription,
+      publisher: { "@id": `${pageUrl}#organization` },
+      inLanguage: "en"
+    },
+    {
+      "@type": "WebPage",
+      "@id": `${pageUrl}#webpage`,
+      name: pageTitle,
+      description: pageDescription,
+      url: pageUrl,
+      isPartOf: { "@id": `${pageUrl}#website` },
+      mainEntity: { "@id": `${pageUrl}#dataset` },
+      dateModified: payload.generatedAt,
+      inLanguage: "en"
+    },
+    {
+      "@type": "Dataset",
+      "@id": `${pageUrl}#dataset`,
+      name: "Live AI coding model rankings by developers",
+      description: "Continuously updated AI coding model ratings weighted by recency, confidence, and independent developer participation.",
+      url: pageUrl,
+      dateModified: payload.generatedAt,
+      creator: { "@id": `${pageUrl}#organization` },
+      variableMeasured: ["Result quality", "Usage efficiency"],
+      measurementTechnique: "Opt-in developer experience ratings"
+    }
+  ]
+};
+---
+<BaseLayout title={pageTitle} description={pageDescription} imageAlt="AI coding model rankings based on recent ratings from real developers" structuredData={structuredData}>
+  <div class="landing-page">
+    <Header generatedAt={payload.generatedAt} />
+    <main id="main-content">
+      <Intro />
+      <section id="cli" class="cli-band" aria-labelledby="cli-title">
+        <div class="page-inner cli-inner">
+          <div class="cli-copy">
+            <h2 id="cli-title">Report from your terminal.</h2>
+            <p>Install once, connect your tools, and submit only confirmed ratings on Linux, macOS, or Windows.</p>
+            <p class="cli-trust-note">Open source and local-only. No code or prompts collected. <a href="https://github.com/isaiokay-com/isAIOkay" rel="noreferrer" target="_blank">View source ↗</a></p>
+          </div>
+          <div class="cli-setup" role="figure" aria-label="Terminal setup">
+            <div class="cli-setup-heading">
+              <span class="cli-term-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="cli-term-title">isaiokay</span>
+            </div>
+            <ol class="cli-steps" aria-label="CLI reporting tutorial" data-cli-progress>
+              <li class="cli-step cli-step--install" data-cli-installer data-cli-step>
+                <span class="cli-step-label"><b>01</b>Install the CLI</span>
+                <div class="cli-package-tabs" role="tablist" aria-label="Choose a package manager">
+                  <button id="cli-package-npm" type="button" role="tab" aria-selected="true" aria-controls="cli-install-command" tabindex="0" data-cli-package data-command="npm install --global @isaiokay/cli">npm</button>
+                  <button id="cli-package-pnpm" type="button" role="tab" aria-selected="false" aria-controls="cli-install-command" tabindex="-1" data-cli-package data-command="pnpm add --global @isaiokay/cli">pnpm</button>
+                  <button id="cli-package-bun" type="button" role="tab" aria-selected="false" aria-controls="cli-install-command" tabindex="-1" data-cli-package data-command="bun add --global @isaiokay/cli">Bun</button>
+                </div>
+                <div id="cli-install-command" class="cli-command" role="tabpanel" aria-labelledby="cli-package-npm">
+                  <code data-cli-install-command>npm install --global @isaiokay/cli</code>
+                  <button type="button" class="cli-copy-button" data-copy-command aria-label="Copy install command"><span aria-live="polite">Copy</span></button>
+                </div>
+                <p class="cli-step-note"><span aria-hidden="true">#</span>Same CLI via npm, pnpm, or Bun.</p>
+                <p class="cli-step-next" data-cli-next hidden>Copy to reveal next step <span aria-hidden="true">↓</span></p>
+              </li>
+              <li class="cli-step cli-step--login" data-cli-step>
+                <span class="cli-step-label"><b>02</b>Run onboarding</span>
+                <div class="cli-command">
+                  <code>isaiokay</code>
+                  <button type="button" class="cli-copy-button" data-copy-command aria-label="Copy onboarding command"><span aria-live="polite">Copy</span></button>
+                </div>
+                <p class="cli-step-note"><span aria-hidden="true">#</span>Sign in with GitHub, connect detected coding CLIs, and enable automatic questionnaires.</p>
+                <p class="cli-step-next" data-cli-next hidden>Copy to reveal next step <span aria-hidden="true">↓</span></p>
+              </li>
+              <li class="cli-step cli-step--run" data-cli-step>
+                <span class="cli-step-label"><b>03</b>Use your normal CLI</span>
+                <div class="cli-command cli-command--ready">
+                  <code>codex</code>
+                  <button type="button" class="cli-copy-button" data-copy-command aria-label="Copy example harness command"><span aria-live="polite">Copy</span></button>
+                </div>
+                <p class="cli-step-note"><span aria-hidden="true">#</span>Keep using Codex, Claude, Cursor, or another harness. Eligible questionnaires open after a session.</p>
+              </li>
+            </ol>
+            <noscript>
+              <style>
+                .landing-page .cli-steps[data-cli-progress] > .cli-step[data-cli-step] {
+                  display: grid !important;
+                }
+              </style>
+            </noscript>
+            <details class="cli-more">
+              <summary>More setup options</summary>
+              <div class="cli-more-grid">
+                <div>
+                  <strong>Headless setup</strong>
+                  <div class="cli-command">
+                    <code>isaiokay setup --headless</code>
+                    <button type="button" class="cli-copy-button" data-copy-command aria-label="Copy headless setup command"><span aria-live="polite">Copy</span></button>
+                  </div>
+                  <p><span aria-hidden="true">#</span>Open the link on any device. First-time auth still needs GitHub in a browser.</p>
+                </div>
+                <div>
+                  <strong>Connect everything detected</strong>
+                  <div class="cli-command">
+                    <code>isaiokay install --all</code>
+                    <button type="button" class="cli-copy-button" data-copy-command aria-label="Copy install-all command"><span aria-live="polite">Copy</span></button>
+                  </div>
+                  <p><span aria-hidden="true">#</span>Install every supported, unconfigured integration.</p>
+                </div>
+                <div>
+                  <strong>Preview without installing</strong>
+                  <div class="cli-command">
+                    <code>npx --yes @isaiokay/cli --help</code>
+                    <button type="button" class="cli-copy-button" data-copy-command aria-label="Copy one-shot preview command"><span aria-live="polite">Copy</span></button>
+                  </div>
+                  <p class="cli-runner-alternatives"><span aria-hidden="true">#</span>Also: <code>pnpm dlx @isaiokay/cli --help</code> or <code>bunx @isaiokay/cli --help</code>.</p>
+                </div>
+              </div>
+            </details>
+          </div>
+        </div>
+      </section>
+      <RankingShell items={items} selectedSlug={selectedSlug} selectedPeriod={period} selectedSort={sort} />
+      <MethodologyDialog />
+      {feedbackItem && <section id="feedback" class="notice" aria-live="polite">Want to rate <strong>{payload.items.find((item) => item.slug === feedbackItem)?.name}</strong>? Sign in with GitHub to report how the model felt and which coding agent you used.</section>}
+    </main>
+    <footer class="site-footer">
+      <div class="page-inner site-footer-inner">
+        <strong class="footer-brand">IsAIokay.com</strong>
+        <nav aria-label="Footer"><a href="#methodology">Methodology</a><a href="#cli">CLI</a><a href="https://github.com/isaiokay-com/isAIOkay" rel="noreferrer" target="_blank">Open source ↗</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a></nav>
+        <a class="footer-author" href="https://x.com/andfkdev" rel="me noreferrer" target="_blank">Built by @andfkdev</a>
+      </div>
+    </footer>
+    <FeedbackDialog client:load items={payload.items.map((item) => ({ id: item.id, slug: item.slug, name: item.name, providerName: item.providerName }))} agents={agents} initialSlug={feedbackItem} />
+  </div>
+  <script>
+    const resetCopyButton = (button: HTMLButtonElement): void => {
+      button.disabled = false;
+      button.dataset.state = "default";
+      const label = button.querySelector("span");
+      if (label) label.textContent = "Copy";
+    };
+
+    for (const installer of document.querySelectorAll<HTMLElement>("[data-cli-installer]")) {
+      const tabs = Array.from(installer.querySelectorAll<HTMLButtonElement>("[data-cli-package]"));
+      const command = installer.querySelector<HTMLElement>("[data-cli-install-command]");
+      const panel = installer.querySelector<HTMLElement>("[role='tabpanel']");
+      if (!command || !panel) continue;
+
+      const selectTab = (next: HTMLButtonElement): void => {
+        for (const tab of tabs) {
+          const selected = tab === next;
+          tab.setAttribute("aria-selected", String(selected));
+          tab.tabIndex = selected ? 0 : -1;
+        }
+        command.textContent = next.dataset.command ?? "";
+        panel.setAttribute("aria-labelledby", next.id);
+        const copyButton = panel.querySelector<HTMLButtonElement>("[data-copy-command]");
+        if (copyButton) resetCopyButton(copyButton);
+      };
+
+      tabs.forEach((tab, index) => {
+        tab.addEventListener("click", () => selectTab(tab));
+        tab.addEventListener("keydown", (event) => {
+          let nextIndex = index;
+          if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
+          else if (event.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
+          else if (event.key === "Home") nextIndex = 0;
+          else if (event.key === "End") nextIndex = tabs.length - 1;
+          else return;
+          event.preventDefault();
+          const next = tabs[nextIndex];
+          if (!next) return;
+          selectTab(next);
+          next.focus();
+        });
+      });
+    }
+
+    const revealNextStep = (button: HTMLButtonElement): void => {
+      const step = button.closest<HTMLElement>("[data-cli-step]");
+      if (!step) return;
+      const next = step.nextElementSibling instanceof HTMLElement && step.nextElementSibling.matches("[data-cli-step]")
+        ? step.nextElementSibling
+        : null;
+      if (!next || next.classList.contains("is-revealed")) return;
+      next.classList.add("is-revealed");
+      const nextHint = step.querySelector<HTMLElement>("[data-cli-next]");
+      if (nextHint) nextHint.hidden = true;
+      const ownHint = next.querySelector<HTMLElement>("[data-cli-next]");
+      if (ownHint) ownHint.hidden = false;
+      next.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    };
+
+    const progress = document.querySelector<HTMLElement>("[data-cli-progress]");
+    const firstStep = progress?.querySelector<HTMLElement>("[data-cli-step]");
+    const firstHint = firstStep?.querySelector<HTMLElement>("[data-cli-next]");
+    if (firstHint) firstHint.hidden = false;
+
+    for (const button of document.querySelectorAll<HTMLButtonElement>("[data-copy-command]")) {
+      button.dataset.state = "default";
+      button.addEventListener("click", async () => {
+        const code = button.closest(".cli-command")?.querySelector("code");
+        const text = code?.textContent?.trim();
+        if (!code || !text) return;
+        button.disabled = true;
+        button.dataset.state = "loading";
+        const label = button.querySelector("span");
+        if (label) label.textContent = "Copying";
+        try {
+          await navigator.clipboard.writeText(text);
+          button.dataset.state = "success";
+          if (label) label.textContent = "Copied";
+          revealNextStep(button);
+        } catch {
+          const range = document.createRange();
+          range.selectNodeContents(code);
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+          button.dataset.state = "error";
+          if (label) label.textContent = "Selected";
+        } finally {
+          window.setTimeout(() => resetCopyButton(button), 1800);
+        }
+      });
+    }
+  </script>
+</BaseLayout>

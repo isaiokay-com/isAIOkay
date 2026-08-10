@@ -1,0 +1,55 @@
+{
+  "name": "@isaiokay/cli",
+  "version": "0.2.1",
+  "description": "Privacy-preserving local event bridge for IsAIokay.com",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/isaiokay-com/isAIOkay.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://isaiokay.com",
+  "bugs": {
+    "url": "https://github.com/isaiokay-com/isAIOkay/issues"
+  },
+  "keywords": [
+    "ai",
+    "coding-agents",
+    "developer-tools",
+    "feedback"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "bin": {
+    "isaiokay": "dist/src/bin/isaiokay.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^22.15.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "cross-spawn": "^7.0.6"
+  }
+}

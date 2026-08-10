@@ -1,0 +1,15 @@
+---
+import AuthControl from "./islands/AuthControl";
+import AllowanceIndicator from "./AllowanceIndicator.astro";
+import { getCurrentIdentity } from "../services/auth";
+import { getFeedbackAllowance } from "../db/repositories";
+import { getRuntimeEnv } from "../lib/runtime";
+
+const env = getRuntimeEnv(Astro.locals);
+const identity = await getCurrentIdentity(Astro.request, env);
+const allowance = identity ? await getFeedbackAllowance(env, identity.userId) : null;
+---
+<div class="flex min-h-11 items-center gap-3" aria-label="Account controls">
+  {allowance && <AllowanceIndicator allowance={allowance} />}
+  <AuthControl client:load authenticated={Boolean(identity)} name={identity?.name ?? null} image={identity?.image ?? null} username={identity?.profile.githubUsername ?? null} />
+</div>

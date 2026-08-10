@@ -1,0 +1,38 @@
+---
+const { trend, label = "Seven-day score trend", compact = false } = Astro.props as { trend: Array<{ at: number; score: number }>; label?: string; compact?: boolean };
+const width = 260;
+const height = 72;
+const values = trend.map((point) => point.score);
+const max = Math.max(100, ...values, 1);
+const min = Math.min(0, ...values);
+const range = Math.max(1, max - min);
+const startAt = trend[0]?.at ?? 0;
+const endAt = trend.at(-1)?.at ?? startAt;
+const timeRange = Math.max(1, endAt - startAt);
+const coordinates = trend.map((point) => {
+  const x = trend.length <= 1 ? width / 2 : ((point.at - startAt) / timeRange) * width;
+  const y = height - ((point.score - min) / range) * (height - 10) - 5;
+  return { at: point.at, score: point.score, value: `${x.toFixed(1)},${y.toFixed(1)}` };
+});
+const segments = coordinates.reduce<Array<typeof coordinates>>((groups, point) => {
+  const current = groups.at(-1);
+  if (!current || (current.at(-1) && point.at - current.at(-1)!.at > 36 * 60 * 60_000)) groups.push([point]);
+  else current.push(point);
+  return groups;
+}, []);
+const latestSegment = segments.at(-1) ?? [];
+const difference = (latestSegment.at(-1)?.score ?? 0) - (latestSegment[0]?.score ?? 0);
+const tone = difference < -2 ? "negative" : difference > 2 ? "positive" : "neutral";
+---
+<div class:list={["trend-chart", `trend-chart--${tone}`, { "trend-chart--compact": compact }]} role="img" aria-label={label}>
+  <svg viewBox={`0 0 ${width} ${height}`} class="trend-svg" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+    <path class="trend-baseline" d={`M0 ${height - 1}H${width}`} stroke-width="1" fill="none" />
+    {segments.map((segment) => segment.length > 1 && (
+      <polyline class="trend-line" points={segment.map((point) => point.value).join(" ")} fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    ))}
+    {coordinates.map((point, index) => (!compact || coordinates.length === 1 || index === coordinates.length - 1) && (() => {
+      const [x, y] = point.value.split(",");
+      return <circle class="trend-point" cx={x} cy={y} r={compact ? "2" : "2.5"} />;
+    })())}
+  </svg>
+</div>

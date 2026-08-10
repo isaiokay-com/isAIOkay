@@ -1,0 +1,14 @@
+---
+import type { FeedbackAllowance } from "../types";
+const { allowance } = Astro.props as { allowance: FeedbackAllowance };
+const formatRemaining = () => {
+  if (allowance.remaining === 2) return "2 ratings available";
+  if (allowance.remaining === 1) return "1 rating available";
+  if (!allowance.nextAvailableAt) return "No ratings available";
+  const milliseconds = Math.max(0, new Date(allowance.nextAvailableAt).getTime() - Date.now());
+  const hours = Math.floor(milliseconds / 3_600_000);
+  const minutes = Math.ceil((milliseconds % 3_600_000) / 60_000);
+  return `Next rating available in ${hours}h ${minutes}m`;
+};
+---
+<span class="text-[.75rem] font-bold text-green-700 sm:text-[.83rem]" aria-label="Feedback allowance">{formatRemaining()}</span>

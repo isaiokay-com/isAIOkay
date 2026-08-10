@@ -1,0 +1,80 @@
+{
+  "name": "is-ai-okay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A server-rendered, Cloudflare-first public utility for recent AI coding feedback.",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "overrides": {
+    "undici": "7.29.0",
+    "js-yaml": "4.3.1",
+    "nanoid": "3.3.17",
+    "@esbuild-kit/core-utils": {
+      "esbuild": "0.25.12"
+    }
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "dev:worker": "npm run build && wrangler dev --local --persist-to .wrangler/state --config ./dist/server/wrangler.json",
+    "build": "astro build",
+    "preview": "astro preview",
+    "typecheck": "astro check && tsc --noEmit",
+    "lint": "eslint . --max-warnings=0",
+    "test": "vitest run --config vitest.config.ts",
+    "test:workers": "vitest run --config vitest.workers.config.ts",
+    "test:all": "npm run test && npm run test:workers",
+    "test:e2e": "playwright test",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply is-ai-okay --local",
+    "db:migrate:remote": "wrangler d1 migrations apply is-ai-okay --remote",
+    "db:seed": "wrangler d1 execute is-ai-okay --local --file=./scripts/seed.sql",
+    "deploy:preflight": "node scripts/preflight-production-auth.mjs",
+    "deploy:config:check": "node scripts/check-production-config.mjs",
+    "e2e:prepare": "wrangler d1 migrations apply is-ai-okay --local --config ./wrangler.example.jsonc && wrangler d1 execute is-ai-okay --local --config ./wrangler.example.jsonc --file=./scripts/seed.sql && wrangler d1 execute is-ai-okay --local --config ./wrangler.example.jsonc --file=./scripts/reset-e2e.sql",
+    "e2e:server": "npm run e2e:prepare && WRANGLER_CONFIG_PATH=./wrangler.example.jsonc npm run dev:worker -- --port ${PLAYWRIGHT_PORT:-8787} --var BETTER_AUTH_URL:http://127.0.0.1:${PLAYWRIGHT_PORT:-8787} --var BETTER_AUTH_SECRET:development-e2e-secret-with-at-least-thirty-two-characters --var MOCK_GITHUB_AUTH:true",
+    "auth:generate": "npx --yes auth@1.6.25 generate --config ./better-auth.cli.ts --output ./.generated/better-auth.sql --yes",
+    "cf:types": "wrangler types",
+    "deploy": "npm run build && wrangler deploy --config ./dist/server/wrangler.json",
+    "cli:build": "npm run build --workspace @isaiokay/cli",
+    "cli:check": "npm run check --workspace @isaiokay/cli",
+    "cli:test": "npm test --workspace @isaiokay/cli",
+    "cli:pack": "npm pack --workspace @isaiokay/cli --dry-run",
+    "cli:install-script:check": "sh -n scripts/install-cli.sh && sh -n scripts/test-install-cli.sh && sh scripts/test-install-cli.sh"
+  },
+  "dependencies": {
+    "@astrojs/cloudflare": "^14.1.7",
+    "@astrojs/react": "^6.0.2",
+    "@cf-wasm/resvg": "^0.4.0",
+    "@fontsource/ibm-plex-sans": "^5.2.8",
+    "@fontsource/space-grotesk": "^5.2.8",
+    "@tailwindcss/vite": "^4.3.3",
+    "astro": "^7.1.6",
+    "better-auth": "^1.6.25",
+    "drizzle-orm": "^0.45.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.4",
+    "@cloudflare/vitest-pool-workers": "^0.19.1",
+    "@cloudflare/workers-types": "^5.20260731.1",
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@typescript-eslint/eslint-plugin": "^8.65.0",
+    "@typescript-eslint/parser": "^8.65.0",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^10.8.0",
+    "eslint-plugin-astro": "^1.6.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.118.0"
+  }
+}

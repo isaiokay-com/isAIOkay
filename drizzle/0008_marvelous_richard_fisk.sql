@@ -1,0 +1,1 @@
+ALTER TABLE `user` ADD `xUsername` text;

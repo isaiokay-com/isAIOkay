@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      cli_changed: ${{ steps.changes.outputs.cli_changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: cp wrangler.example.jsonc wrangler.jsonc
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run deploy:config:check
+      - run: npm run test:all
+      - run: npm run cli:check
+      - run: npm run cli:test
+      - run: npm run cli:pack
+      - run: npm run cli:install-script:check
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - name: Detect CLI release changes
+        id: changes
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          cli_changed=false
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            cli_changed=true
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            if [[ -n "$BEFORE_SHA" ]] && git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
+              changed_files=$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")
+            else
+              changed_files=$(git diff-tree --root --no-commit-id --name-only -r "$GITHUB_SHA")
+            fi
+            if printf '%s\n' "$changed_files" | grep -Eq '^(packages/cli/|scripts/(install-cli|test-install-cli)\.sh$)'; then
+              cli_changed=true
+            fi
+          fi
+          echo "cli_changed=$cli_changed" >> "$GITHUB_OUTPUT"
+
+  deploy_cloudflare:
+    name: Deploy Cloudflare
+    needs: verify
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.CLOUDFLARE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: https://isaiokay.com
+    concurrency:
+      group: cloudflare-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Prepare production configuration
+        run: node scripts/prepare-cloudflare-config.mjs
+        env:
+          CLOUDFLARE_DATABASE_ID: ${{ secrets.CLOUDFLARE_DATABASE_ID }}
+          CLOUDFLARE_KV_NAMESPACE_ID: ${{ secrets.CLOUDFLARE_KV_NAMESPACE_ID }}
+          TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
+      - run: npm run build
+      - name: Apply D1 migrations
+        run: npx wrangler d1 migrations apply is-ai-okay --remote --config ./wrangler.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Apply idempotent production bootstrap
+        run: npx wrangler d1 execute is-ai-okay --remote --config ./wrangler.jsonc --file=./scripts/bootstrap-production.sql
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config ./dist/server/wrangler.json
+
+  publish_cli:
+    name: Publish CLI
+    needs: verify
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.verify.outputs.cli_changed == 'true' && vars.NPM_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    environment: npm
+    concurrency:
+      group: npm-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run cli:check
+      - run: npm run cli:test
+      - run: npm run cli:pack
+      - name: Require an unpublished package version
+        id: release
+        shell: bash
+        run: |
+          package_name=$(node -p "require('./packages/cli/package.json').name")
+          package_version=$(node -p "require('./packages/cli/package.json').version")
+          if npm view "$package_name@$package_version" version >/dev/null 2>&1; then
+            echo "::notice::$package_name@$package_version is already published; skipping publish."
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish public package
+        if: steps.release.outputs.should_publish == 'true'
+        run: npm publish --workspace @isaiokay/cli --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

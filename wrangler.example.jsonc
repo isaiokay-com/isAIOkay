@@ -1,0 +1,44 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "is-ai-okay",
+  "main": "./src/worker.ts",
+  "compatibility_date": "2026-07-31",
+  "compatibility_flags": ["nodejs_compat"],
+  // Add your own custom-domain route after the zone is in your account.
+  // "routes": [{ "pattern": "example.com/*", "zone_name": "example.com" }],
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "is-ai-okay",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "./drizzle"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "PUBLIC_CACHE",
+      "id": "00000000000000000000000000000000"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "FEEDBACK_ALLOWANCE", "class_name": "FeedbackAllowance" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["FeedbackAllowance"] }
+  ],
+  "ratelimits": [
+    { "name": "AUTH_RATE_LIMIT", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } },
+    { "name": "FEEDBACK_MODAL_RATE_LIMIT", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } },
+    { "name": "FEEDBACK_RATE_LIMIT", "namespace_id": "1003", "simple": { "limit": 8, "period": 60 } },
+    { "name": "ALLOWANCE_RATE_LIMIT", "namespace_id": "1004", "simple": { "limit": 30, "period": 60 } },
+    { "name": "ADMIN_RATE_LIMIT", "namespace_id": "1005", "simple": { "limit": 60, "period": 60 } }
+  ],
+  "triggers": { "crons": ["*/10 * * * *"] },
+  "vars": {
+    "BETTER_AUTH_URL": "http://localhost:8787",
+    "MOCK_GITHUB_AUTH": "true"
+  }
+}

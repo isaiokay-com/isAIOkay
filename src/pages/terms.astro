@@ -1,0 +1,20 @@
+---
+import BaseLayout from "../components/BaseLayout.astro";
+import Header from "../components/Header.astro";
+export const prerender = false;
+---
+<BaseLayout title="Terms of Use | IsAIokay.com" description="Review the participation rules and important limitations for developer-submitted AI coding model ratings on IsAIokay.com" noindex>
+  <Header />
+  <main class="legal-page max-w-3xl px-5 py-10 sm:px-8">
+    <p class="eyebrow">Policy draft</p>
+    <h1 class="text-3xl font-extrabold tracking-[-.05em]">Terms</h1>
+    <aside class="notice" role="note"><strong>Operator review required.</strong> These participation rules are not final legal terms. The operator must add the operating entity, governing law, eligibility, warranty, liability, termination, and dispute provisions before wider promotion.</aside>
+    <h2>Participation rules</h2>
+    <p>Submit only feedback about recent personal use. Do not submit unlawful, abusive, misleading, automated, or confidential content. The service may rate-limit, down-weight, exclude, or remove reports to protect the integrity of the public signal.</p>
+    <h2>How to interpret results</h2>
+    <p>Scores reflect reported developer experience and are not objective benchmarks, warranties, investment advice, or claims about a provider’s intent. “Possible degradation” is a cautious statistical label, not an allegation.</p>
+    <h2>Contact and support</h2>
+    <p>For questions about these terms or any other support request, email <a href="mailto:hi@isaiokay.com">hi@isaiokay.com</a>.</p>
+    <p><a class="font-bold text-[var(--accent)]" href="/">Back to rankings</a></p>
+  </main>
+</BaseLayout>

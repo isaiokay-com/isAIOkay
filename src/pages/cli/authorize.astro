@@ -1,0 +1,146 @@
+---
+import BaseLayout from "../../components/BaseLayout.astro";
+import Header from "../../components/Header.astro";
+import AuthControl from "../../components/islands/AuthControl";
+import { getRuntimeEnv } from "../../lib/runtime";
+import { getCurrentIdentity } from "../../services/auth";
+
+export const prerender = false;
+Astro.response.headers.set("Cache-Control", "private, no-store");
+
+const env = getRuntimeEnv(Astro.locals);
+const identity = await getCurrentIdentity(Astro.request, env);
+const userCode = Astro.url.searchParams.get("user_code") ?? "";
+---
+<BaseLayout title="Connect the IsAIokay.com CLI" description="Authorize the privacy-preserving IsAIokay.com CLI to submit only the AI coding model ratings you confirm." noindex>
+  <Header />
+  <main id="main-content" class="cli-auth-page">
+    <section class="cli-auth-intro" aria-labelledby="cli-auth-title">
+      <p class="cli-auth-signal"><span aria-hidden="true"></span>Secure CLI connection</p>
+      <h1 id="cli-auth-title">Connect this coding tool</h1>
+      <p class="cli-auth-deck">Authorize the CLI to check your remaining allowance and send only the ratings you explicitly confirm.</p>
+
+      <dl class="cli-auth-guardrails">
+        <div>
+          <dt>Limited access</dt>
+          <dd>Tool name, detected model label, attribution confidence, coarse session duration, and your approved rating.</dd>
+        </div>
+        <div>
+          <dt>Private by default</dt>
+          <dd>No GitHub credentials, prompts, code, transcripts, or repository paths.</dd>
+        </div>
+      </dl>
+      <p class="cli-auth-revoke">Revoke access at any time with <code>isaiokay logout</code>.</p>
+    </section>
+
+    <section class="cli-auth-card" aria-labelledby="authorization-heading" data-authorization-card>
+      {!identity ? (
+        <div class="cli-auth-state cli-auth-state--signin">
+          <div class="cli-auth-state-heading">
+            <span class="cli-auth-step">Step 1 of 2</span>
+            <span class="cli-auth-status">Sign-in required</span>
+          </div>
+          <h2 id="authorization-heading">Sign in to continue</h2>
+          <p>Use the GitHub account you want associated with CLI ratings. You’ll return here with this device code intact.</p>
+          {userCode && (
+            <div class="cli-code-summary" aria-label="Device code waiting for approval">
+              <span>Device code</span>
+              <code>{userCode}</code>
+            </div>
+          )}
+          <div class="cli-auth-action"><AuthControl client:load authenticated={false} name={null} image={null} /></div>
+          <p class="cli-auth-fineprint">GitHub handles sign-in. IsAIokay.com receives only your public profile identity.</p>
+        </div>
+      ) : (
+        <>
+          <form id="authorization-form" class="cli-auth-state" data-approval-form>
+            <div class="cli-auth-state-heading">
+              <span class="cli-auth-step">Step 2 of 2</span>
+              <span class="cli-auth-status cli-auth-status--ready">Ready to approve</span>
+            </div>
+            <h2 id="authorization-heading">Approve this connection</h2>
+            <p>Signed in as <strong>{identity.name}</strong>. Confirm that the code below matches the one shown in your terminal.</p>
+
+            <div class="cli-code-field">
+              <label for="user-code">Code shown by the CLI</label>
+              <input id="user-code" value={userCode} maxlength="16" autocomplete="one-time-code" aria-describedby="authorization-result" placeholder="ABCD-EFGH" />
+              <p id="authorization-result" class="cli-field-message" data-state="helper">Codes expire after a short time. Enter a fresh code if this one no longer works.</p>
+            </div>
+
+            <button id="approve-device" class="button-dark cli-auth-primary" type="submit">
+              <span class="cli-auth-spinner" aria-hidden="true"></span>
+              <span data-button-label>Approve this CLI</span>
+            </button>
+          </form>
+
+          <div id="authorization-success" class="cli-auth-state cli-auth-success" tabindex="-1" hidden>
+            <span class="cli-success-mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img"><path d="m6.5 12.5 3.25 3.25 7.75-8" /></svg>
+            </span>
+            <p class="cli-auth-step">Authorization complete</p>
+            <h2 id="authorization-success-heading">CLI connected</h2>
+            <p>Return to your terminal to continue. You can safely close this tab.</p>
+            <div class="cli-success-summary">
+              <span>Approved code</span>
+              <code>{userCode}</code>
+            </div>
+          </div>
+          <p id="authorization-announcer" class="visually-hidden" role="status" aria-live="polite"></p>
+        </>
+      )}
+    </section>
+  </main>
+</BaseLayout>
+
+{identity && <script>
+  const button = document.querySelector<HTMLButtonElement>("#approve-device");
+  const input = document.querySelector<HTMLInputElement>("#user-code");
+  const result = document.querySelector<HTMLParagraphElement>("#authorization-result");
+  const form = document.querySelector<HTMLFormElement>("#authorization-form");
+  const success = document.querySelector<HTMLElement>("#authorization-success");
+  const card = document.querySelector<HTMLElement>("[data-authorization-card]");
+  const announcer = document.querySelector<HTMLParagraphElement>("#authorization-announcer");
+  const buttonLabel = button?.querySelector<HTMLElement>("[data-button-label]");
+
+  input?.addEventListener("input", () => {
+    if (input.getAttribute("aria-invalid") !== "true" || !result || !button || !buttonLabel) return;
+    input.removeAttribute("aria-invalid");
+    result.dataset.state = "helper";
+    result.textContent = "Codes expire after a short time. Enter a fresh code if this one no longer works.";
+    button.dataset.state = "default";
+    buttonLabel.textContent = "Approve this CLI";
+  });
+
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!input || !result || !button || !buttonLabel || !success || !announcer) return;
+    button.disabled = true;
+    button.dataset.state = "loading";
+    buttonLabel.textContent = "Approving…";
+    result.dataset.state = "loading";
+    result.textContent = "Checking this code…";
+    input.removeAttribute("aria-invalid");
+    try {
+      const response = await fetch("/api/cli/device/approve", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userCode: input.value })
+      });
+      const payload = await response.json() as { ok?: boolean; error?: { message?: string } };
+      if (!response.ok) throw new Error(payload.error?.message ?? "Authorization failed.");
+      form.hidden = true;
+      success.hidden = false;
+      card?.setAttribute("aria-labelledby", "authorization-success-heading");
+      announcer.textContent = "CLI connected. Return to your terminal to continue.";
+      success.focus();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The CLI could not be authorized.";
+      result.dataset.state = "error";
+      result.textContent = `${message} Check the code and try again.`;
+      input.setAttribute("aria-invalid", "true");
+      button.dataset.state = "error";
+      buttonLabel.textContent = "Try approval again";
+      button.disabled = false;
+    }
+  });
+</script>}

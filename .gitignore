@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.astro/
+.wrangler/
+.dev.vars
+.env
+wrangler.jsonc
+.DS_Store
+*.log
+playwright-report/
+test-results/
+.generated/
+coverage/
+worker-configuration.d.ts
+dev.db
+docs/brand/is-ai-okay-brand-board.png
+
+# Local agent and design workflow state
+.agents/
+.hallmark/
+public/logo-concept-*.png

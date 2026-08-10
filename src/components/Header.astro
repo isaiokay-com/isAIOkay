@@ -1,0 +1,32 @@
+---
+import AccountIsland from "./AccountIsland.astro";
+
+interface Props {
+  generatedAt?: string;
+  variant?: "default" | "focused";
+}
+const { generatedAt, variant = "default" } = Astro.props;
+const minutes = generatedAt ? Math.max(0, Math.floor((Date.now() - new Date(generatedAt).getTime()) / 60_000)) : null;
+const freshness = minutes === null ? "Ranking data" : minutes < 1 ? "Updated just now" : `Updated ${minutes} min ago`;
+---
+<header class:list={["site-header", { "site-header--focused": variant === "focused" }]}>
+  <div class="page-inner site-header-inner">
+    <a href="/" class="brand-lockup" aria-label="IsAIokay.com home">
+      <img src="/logo-lockup-blue.png" alt="IsAIokay.com" />
+    </a>
+    {variant === "focused" ? (
+      <span class="site-header-context">CLI authorization</span>
+    ) : (
+      <div class="header-actions">
+        <div class="header-status" aria-live="polite">
+          <span class="live-label"><i aria-hidden="true"></i>Live</span>
+          <span>{freshness}</span>
+        </div>
+        <a class="header-repo-link" href="https://github.com/isaiokay-com/isAIOkay" rel="noreferrer" target="_blank" aria-label="View isaiokay-com/isAIOkay on GitHub">GitHub <span aria-hidden="true">↗</span></a>
+        <AccountIsland server:defer>
+          <span slot="fallback" class="account-fallback">Checking account</span>
+        </AccountIsland>
+      </div>
+    )}
+  </div>
+</header>

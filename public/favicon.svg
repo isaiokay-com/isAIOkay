@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">IsAIokay.com</title>
+  <desc id="desc">White AI monogram on a cobalt blue square</desc>
+  <rect width="64" height="64" rx="14" fill="#2563EB"/>
+  <path fill="#FFFFFF" fill-rule="evenodd" d="M7 49V20c0-4.4 3.6-8 8-8h14c4.4 0 8 3.6 8 8v29h-9V39H16v10H7Zm9-19h12v-9H16v9Z"/>
+  <path fill="#FFFFFF" d="M43 12h16v9h-4v19h4v9H43v-9h4V21h-4v-9Z"/>
+</svg>

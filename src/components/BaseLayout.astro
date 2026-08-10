@@ -1,0 +1,92 @@
+---
+import "../styles/global.css";
+import { serializeJsonForHtml } from "../lib/security";
+import { DEFAULT_SOCIAL_IMAGE_ALT, HOME_PAGE_DESCRIPTION, HOME_PAGE_TITLE } from "../lib/seo";
+
+interface Props {
+  title?: string;
+  description?: string;
+  noindex?: boolean;
+  image?: string;
+  imageAlt?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+  type?: "website" | "profile";
+  profileUsername?: string;
+  structuredData?: Record<string, unknown>;
+}
+const {
+  title = HOME_PAGE_TITLE,
+  description = HOME_PAGE_DESCRIPTION,
+  noindex = false,
+  image = "/og-ai-coding-model-rankings.png",
+  imageAlt = DEFAULT_SOCIAL_IMAGE_ALT,
+  imageWidth = 1200,
+  imageHeight = 630,
+  type = "website",
+  profileUsername,
+  structuredData
+} = Astro.props;
+const origin = Astro.site ?? new URL("https://isaiokay.com");
+const canonicalUrl = new URL(Astro.url.pathname, origin).toString();
+const socialImage = new URL(image, origin).toString();
+const defaultStructuredData = {
+  "@context": "https://schema.org",
+  "@type": "WebPage",
+  name: title,
+  url: canonicalUrl,
+  description,
+  isPartOf: {
+    "@type": "WebSite",
+    name: "IsAIokay.com",
+    url: new URL("/", origin).toString()
+  },
+  inLanguage: "en"
+};
+const structuredDataJson = structuredData
+  ? serializeJsonForHtml(structuredData)
+  : noindex
+    ? null
+    : serializeJsonForHtml(defaultStructuredData);
+---
+<!doctype html>
+<html lang="en" prefix={type === "profile" ? "og: https://ogp.me/ns# profile: https://ogp.me/ns/profile#" : "og: https://ogp.me/ns#"}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <meta name="robots" content={noindex ? "noindex,nofollow" : "index,follow,max-image-preview:large"} />
+    <link rel="canonical" href={canonicalUrl} />
+    <meta property="og:site_name" content="IsAIokay.com" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:type" content={type} />
+    {type === "profile" && profileUsername && <meta property="profile:username" content={profileUsername} />}
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonicalUrl} />
+    <meta property="og:image" content={socialImage} />
+    <meta property="og:image:secure_url" content={socialImage} />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content={String(imageWidth)} />
+    <meta property="og:image:height" content={String(imageHeight)} />
+    <meta property="og:image:alt" content={imageAlt} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={socialImage} />
+    <meta name="twitter:image:alt" content={imageAlt} />
+    <meta name="theme-color" content="#2563EB" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-16.png" sizes="16x16" type="image/png" />
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    {structuredDataJson && <script is:inline type="application/ld+json" set:html={structuredDataJson} />}
+    <title>{title}</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <div class="app-shell"><slot /></div>
+  </body>
+</html>
