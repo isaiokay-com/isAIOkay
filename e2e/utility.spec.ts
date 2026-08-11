@@ -198,6 +198,9 @@ test("a GitHub profile remains private and supports an optional self-declared X 
   await expect(publicPage.getByRole("tab")).toHaveCount(0);
   await expect(publicPage.getByRole("heading", { name: "Ratings", exact: true })).toBeVisible();
   await expect(publicPage.getByText(/Only structured ratings are shown/)).toBeVisible();
+  await expect(publicPage.getByRole("heading", { name: "Your experience belongs in the ranking." })).toBeVisible();
+  await expect(publicPage.getByRole("button", { name: "Join with GitHub" })).toBeVisible();
+  await expect(publicPage.getByRole("link", { name: "Explore live rankings" })).toHaveAttribute("href", "/#ranking");
   await expect(publicPage.locator('link[rel="canonical"]')).toHaveAttribute("href", "https://isaiokay.com/u/edge-builder");
   await expect(publicPage.locator('meta[property="og:type"]')).toHaveAttribute("content", "profile");
   await expect(publicPage.locator('meta[property="profile:username"]')).toHaveAttribute("content", "edge-builder");
@@ -213,6 +216,8 @@ test("a GitHub profile remains private and supports an optional self-declared X 
   expect(socialImage.headers()["content-type"]).toBe("image/png");
   expect((await socialImage.body()).byteLength).toBeGreaterThan(20_000);
   await publicPage.close();
+
+  await expect(page.getByRole("heading", { name: "Your experience belongs in the ranking." })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Edit profile" }).click();
   await settings.getByLabel("Public ratings").uncheck();

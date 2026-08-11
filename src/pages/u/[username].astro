@@ -2,6 +2,7 @@
 import BaseLayout from "../../components/BaseLayout.astro";
 import Header from "../../components/Header.astro";
 import ProfileRatingsList from "../../components/islands/ProfileRatingsList";
+import ProfileCommunityInvite from "../../components/islands/ProfileCommunityInvite";
 import ProfileVisibilityControl from "../../components/islands/ProfileVisibilityControl";
 import { getFeedbackAllowance, getPublicProfileView } from "../../db/repositories";
 import { PROFILE_OG_IMAGE_VERSION } from "../../lib/profile-og";
@@ -145,6 +146,8 @@ const structuredData = profile?.isPublic ? {
           </div>}
         </section>
       </div>
+
+      {!identity && profile.isPublic && <ProfileCommunityInvite client:visible />}
     </>}
   </main>
 </BaseLayout>
