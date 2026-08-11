@@ -57,6 +57,7 @@ const structuredDataJson = structuredData
     <meta name="description" content={description} />
     <meta name="robots" content={noindex ? "noindex,nofollow" : "index,follow,max-image-preview:large"} />
     <link rel="canonical" href={canonicalUrl} />
+    <link rel="describedby" href={new URL("/llms.txt", origin).toString()} type="text/markdown" />
     <meta property="og:site_name" content="IsAIokay.com" />
     <meta property="og:locale" content="en_US" />
     <meta property="og:type" content={type} />

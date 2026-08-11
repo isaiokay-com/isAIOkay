@@ -1,13 +1,16 @@
 import type { PublicProfileView } from "../db/repositories";
 
+export const PROFILE_OG_IMAGE_VERSION = "3";
+
 const OG_COLOR = {
-  paper: "#F8FAFD",
-  paperAccent: "#EEF3FF",
-  rule: "#DDE3EC",
-  ink: "#182033",
+  paper: "#F8FAFC",
+  surface: "#FFFFFF",
+  rule: "#DCE2EA",
+  ruleStrong: "#C8D0DC",
+  ink: "#0D1420",
   muted: "#59657A",
-  accent: "#315EDE",
-  avatarFallback: "#E8EEFF"
+  accent: "#2563EB",
+  avatarFallback: "#EFF6FF"
 } as const;
 
 const OG_FONT = {
@@ -47,11 +50,13 @@ export const fetchProfileAvatar = async (avatarUrl: string | null): Promise<stri
     const url = new URL(avatarUrl);
     if (url.protocol !== "https:" || url.hostname !== "avatars.githubusercontent.com") return null;
     const response = await fetch(url, {
+      cache: "no-store",
       headers: { accept: "image/avif,image/webp,image/png,image/jpeg" },
       // Cloudflare Workers supports only "follow" and "manual". Manual keeps
-      // this fetch pinned to the allowlisted avatar host.
-      redirect: "manual",
-      cf: { cacheEverything: true, cacheTtl: 86_400 }
+      // this fetch pinned to the allowlisted avatar host. The generated OG image
+      // is edge-cached separately, so bypass this subrequest cache to avoid
+      // retaining an old image at GitHub's stable avatar URL.
+      redirect: "manual"
     });
     if (!response.ok) return null;
     const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.toLowerCase() ?? "";
@@ -65,25 +70,30 @@ export const fetchProfileAvatar = async (avatarUrl: string | null): Promise<stri
 };
 
 export const renderProfileOgSvg = (profile: PublicProfileView, avatarDataUrl: string | null): string => {
-  const displayName = escapeXml(clipped(profile.displayName, 34));
+  const displayName = escapeXml(clipped(profile.displayName, 22));
+  const hookName = clipped(profile.displayName, 24);
+  const hookLine = `${hookName} trusts right now.`;
+  const hookFontSize = hookLine.length > 38 ? 40 : hookLine.length > 30 ? 48 : hookLine.length > 24 ? 54 : 60;
   const username = escapeXml(profile.username);
   const avatar = avatarDataUrl
-    ? `<image href="${avatarDataUrl}" x="78" y="180" width="188" height="188" preserveAspectRatio="xMidYMid slice" clip-path="url(#avatar-clip)"/>`
-    : `<circle cx="172" cy="274" r="94" fill="${OG_COLOR.avatarFallback}"/><text x="172" y="291" text-anchor="middle" font-family="${OG_FONT.display}" font-size="48" font-weight="700" fill="${OG_COLOR.accent}">${escapeXml(initials(profile.displayName))}</text>`;
+    ? `<image href="${avatarDataUrl}" x="96" y="442" width="92" height="92" preserveAspectRatio="xMidYMid slice" clip-path="url(#avatar-clip)"/><rect x="96" y="442" width="92" height="92" rx="14" fill="none" stroke="${OG_COLOR.ruleStrong}" stroke-width="2"/>`
+    : `<rect x="96" y="442" width="92" height="92" rx="14" fill="${OG_COLOR.avatarFallback}" stroke="${OG_COLOR.ruleStrong}" stroke-width="2"/><text x="142" y="500" text-anchor="middle" font-family="${OG_FONT.display}" font-size="30" font-weight="700" fill="${OG_COLOR.accent}">${escapeXml(initials(profile.displayName))}</text>`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-  <defs><clipPath id="avatar-clip"><circle cx="172" cy="274" r="94"/></clipPath></defs>
+  <defs><clipPath id="avatar-clip"><rect x="96" y="442" width="92" height="92" rx="14"/></clipPath></defs>
   <rect width="1200" height="630" fill="${OG_COLOR.paper}"/>
-  <circle cx="1080" cy="-20" r="250" fill="${OG_COLOR.paperAccent}"/>
-  <path d="M0 124H1200M0 496H1200" stroke="${OG_COLOR.rule}" stroke-width="2"/>
-  <text x="72" y="79" font-family="${OG_FONT.display}" font-size="32" font-weight="700" fill="${OG_COLOR.ink}">isAIokay<tspan fill="${OG_COLOR.accent}">.com</tspan></text>
-  <text x="1128" y="78" text-anchor="end" font-family="${OG_FONT.body}" font-size="18" font-weight="400" letter-spacing="2.4" fill="${OG_COLOR.muted}">DEVELOPER MODEL FEEDBACK</text>
+  <rect x="56" y="44" width="1088" height="542" rx="28" fill="${OG_COLOR.surface}" stroke="${OG_COLOR.rule}" stroke-width="2"/>
+  <text x="96" y="126" font-family="${OG_FONT.display}" font-size="36" font-weight="700" letter-spacing="-1.2" fill="${OG_COLOR.ink}">is<tspan fill="${OG_COLOR.accent}">AI</tspan>okay<tspan font-family="${OG_FONT.body}" font-size="23" font-weight="600" letter-spacing="-.4" fill="${OG_COLOR.muted}">.com</tspan></text>
+  <circle cx="916" cy="112" r="6" fill="${OG_COLOR.accent}"/>
+  <text x="934" y="118" font-family="${OG_FONT.body}" font-size="16" font-weight="600" letter-spacing="1.5" fill="${OG_COLOR.muted}">DEVELOPER PROFILE</text>
+  <path d="M96 178H1104" stroke="${OG_COLOR.rule}" stroke-width="2"/>
+  <text x="96" y="281" font-family="${OG_FONT.display}" font-size="60" font-weight="700" letter-spacing="-2.4" fill="${OG_COLOR.ink}">The AI coding models</text>
+  <text x="96" y="351" font-family="${OG_FONT.display}" font-size="${hookFontSize}" font-weight="700" letter-spacing="-2.2" fill="${OG_COLOR.ink}">${escapeXml(hookLine)}</text>
+  <path d="M96 408H1104" stroke="${OG_COLOR.rule}" stroke-width="2"/>
   ${avatar}
-  <circle cx="243" cy="345" r="17" fill="${OG_COLOR.accent}" stroke="${OG_COLOR.paper}" stroke-width="6"/>
-  <path d="m236 345 5 5 10-12" fill="none" stroke="${OG_COLOR.paper}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="312" y="216" font-family="${OG_FONT.body}" font-size="25" font-weight="400" fill="${OG_COLOR.accent}">@${username}</text>
-  <text x="312" y="300" font-family="${OG_FONT.display}" font-size="68" font-weight="700" letter-spacing="-2.4" fill="${OG_COLOR.ink}">${displayName}</text>
-  <text x="312" y="349" font-family="${OG_FONT.body}" font-size="24" font-weight="400" fill="${OG_COLOR.muted}">Public ratings from real AI coding sessions.</text>
-  <text x="1128" y="575" text-anchor="end" font-family="${OG_FONT.body}" font-size="20" font-weight="400" fill="${OG_COLOR.accent}">isaiokay.com/u/${username}</text>
+  <text x="216" y="481" font-family="${OG_FONT.display}" font-size="34" font-weight="700" letter-spacing="-1" fill="${OG_COLOR.ink}">${displayName}</text>
+  <text x="216" y="519" font-family="${OG_FONT.body}" font-size="21" font-weight="600" fill="${OG_COLOR.accent}">@${username}</text>
+  <text x="1104" y="480" text-anchor="end" font-family="${OG_FONT.body}" font-size="20" font-weight="400" fill="${OG_COLOR.muted}">Public ratings from real AI coding sessions.</text>
+  <text x="1104" y="519" text-anchor="end" font-family="${OG_FONT.body}" font-size="19" font-weight="600" fill="${OG_COLOR.accent}">isaiokay.com/u/${username}</text>
 </svg>`;
 };

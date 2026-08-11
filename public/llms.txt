@@ -1,0 +1,21 @@
+# IsAIokay.com
+
+> IsAIokay.com publishes recent, community-sourced ratings of AI coding models from developers who have used them in real coding sessions.
+
+Ratings are structured feedback, not laboratory benchmarks. Recent reports carry more weight, and confidence rises with eligible evidence and independent developer participation. Public profile pages contain only ratings developers explicitly choose to share.
+
+## Primary resources
+
+- [Live AI coding model rankings](https://isaiokay.com/): Current model rankings, rating methodology, confidence signals, and instructions for submitting feedback.
+- [Methodology](https://isaiokay.com/#methodology): How ratings are weighted, moderated, and translated into confidence signals.
+- [Sitemap](https://isaiokay.com/sitemap.xml): Complete list of current public model and developer profile pages.
+- [Source repository](https://github.com/isaiokay-com/isAIOkay): Open-source website and CLI implementation, documentation, and contribution history.
+
+## Policies
+
+- [Privacy policy](https://isaiokay.com/privacy): Data collection, public-profile visibility, GitHub identity, and anti-abuse handling.
+- [Terms of use](https://isaiokay.com/terms): Participation rules and service limitations.
+
+## Optional
+
+- [CLI documentation](https://github.com/isaiokay-com/isAIOkay/blob/main/docs/cli.md): How the local CLI collects and submits confirmed ratings without collecting code or prompts.

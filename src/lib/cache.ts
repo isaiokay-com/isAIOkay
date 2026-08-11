@@ -4,7 +4,7 @@ import { getRankingFromD1 } from "../db/repositories";
 import { httpsUrlSchema } from "./security";
 import { z } from "zod";
 
-export const PUBLIC_EDGE_CACHE_NAME = "isaiokay-public-v12";
+export const PUBLIC_EDGE_CACHE_NAME = "isaiokay-public-v14";
 
 const timestampSchema = z.string().refine((value) => Number.isFinite(Date.parse(value)));
 const rankingItemSchema = z.object({

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { PROFILE_OG_IMAGE_VERSION } from "../src/lib/profile-og";
 import { HOME_PAGE_DESCRIPTION, HOME_PAGE_HEADING, HOME_PAGE_TITLE } from "../src/lib/seo";
 
 type MockIdentity = "trusted" | "suspicious" | "blocked" | "admin";
@@ -84,6 +85,7 @@ test("the public utility renders and expands without JavaScript", async ({ brows
   await expect(page.locator('meta[property="og:image:height"]')).toHaveAttribute("content", "630");
   await expect(page.locator('meta[name="twitter:image:alt"]')).toHaveAttribute("content", /AI coding model rankings/i);
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", "https://isaiokay.com/");
+  await expect(page.locator('link[rel="describedby"]')).toHaveAttribute("href", "https://isaiokay.com/llms.txt");
   await expect(page.getByRole("heading", { name: HOME_PAGE_HEADING })).toBeVisible();
   await expect(page.getByText("Real developers set the ranking. No lab scores. No synthetic benchmarks.", { exact: true })).toBeVisible();
   expect(await page.locator(".ranking-table .ranking-row").count()).toBeGreaterThanOrEqual(5);
@@ -121,6 +123,26 @@ test("legal drafts are noindex and excluded from the sitemap", async ({ page, re
   const sitemap = await (await request.get("/sitemap.xml")).text();
   expect(sitemap).not.toContain("https://isaiokay.com/privacy");
   expect(sitemap).not.toContain("https://isaiokay.com/terms");
+});
+
+test("llms.txt is a concise public index for language models", async ({ request }) => {
+  const response = await request.get("/llms.txt");
+  expect(response.ok()).toBe(true);
+  expect(response.headers()["content-type"]).toContain("text/plain");
+  const body = await response.text();
+  expect(body).toContain("# IsAIokay.com");
+  expect(body).toContain("[Live AI coding model rankings](https://isaiokay.com/)");
+  expect(body).toContain("[Sitemap](https://isaiokay.com/sitemap.xml)");
+  expect(body).not.toContain("https://isaiokay.com/api/");
+});
+
+test("unknown routes use the branded 404 page", async ({ page }) => {
+  const response = await page.goto("/this-page-does-not-exist");
+  expect(response?.status()).toBe(404);
+  await expect(page).toHaveTitle("Page not found | IsAIokay.com");
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex,nofollow");
+  await expect(page.getByRole("heading", { name: "Page not found." })).toBeVisible();
+  await expect(page.getByRole("link", { name: "View model rankings" })).toHaveAttribute("href", "/");
 });
 
 test("the social preview image is publicly available", async ({ request }) => {
@@ -179,7 +201,7 @@ test("a GitHub profile remains private and supports an optional self-declared X 
   await expect(publicPage.locator('link[rel="canonical"]')).toHaveAttribute("href", "https://isaiokay.com/u/edge-builder");
   await expect(publicPage.locator('meta[property="og:type"]')).toHaveAttribute("content", "profile");
   await expect(publicPage.locator('meta[property="profile:username"]')).toHaveAttribute("content", "edge-builder");
-  await expect(publicPage.locator('meta[property="og:image"]')).toHaveAttribute("content", "https://isaiokay.com/og/profile/edge-builder.png");
+  await expect(publicPage.locator('meta[property="og:image"]')).toHaveAttribute("content", `https://isaiokay.com/og/profile/edge-builder.png?v=${PROFILE_OG_IMAGE_VERSION}`);
   const structuredData = JSON.parse(await publicPage.locator('script[type="application/ld+json"]').textContent() ?? "{}") as {
     mainEntity?: { image?: string; sameAs?: string[] };
   };
