@@ -42,7 +42,9 @@ test("LocalStore writes only minimized events through private atomic files", asy
   assert.equal(contents.includes("private prompt contents"), false);
   assert.equal(contents.includes("cwd"), false);
   assert.equal(contents.includes("raw-session"), false);
-  assert.equal((await stat(store.paths.stateFile)).mode & 0o777, 0o600);
+  if (process.platform !== "win32") {
+    assert.equal((await stat(store.paths.stateFile)).mode & 0o777, 0o600);
+  }
 });
 
 test("LocalStore records a foreground lifecycle pair in one state mutation", async (context) => {

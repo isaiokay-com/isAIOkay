@@ -508,15 +508,16 @@ test("uninstall --all removes owned integrations and every registered shell wrap
   const home = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
   context.after(() => rm(home, { recursive: true, force: true }));
   const env = { SHELL: "/bin/zsh" };
+  const io = { home, env, platform: "linux" as const };
 
-  assert.equal(await runCli(["install", "codex"], capturedIo("", { home, env }).io), 0);
-  assert.equal(await runCli(["install", "claude"], capturedIo("", { home, env }).io), 0);
-  assert.equal(await runCli(["shell", "install"], capturedIo("", { home, env }).io), 0);
-  assert.equal(await runCli(["shell", "install", "bash"], capturedIo("", { home, env }).io), 0);
+  assert.equal(await runCli(["install", "codex"], capturedIo("", io).io), 0);
+  assert.equal(await runCli(["install", "claude"], capturedIo("", io).io), 0);
+  assert.equal(await runCli(["shell", "install"], capturedIo("", io).io), 0);
+  assert.equal(await runCli(["shell", "install", "bash"], capturedIo("", io).io), 0);
   const powerShellProfile = join(home, "custom", "Profile.ps1");
-  assert.equal(await runCli(["shell", "install", "powershell", "--profile", powerShellProfile], capturedIo("", { home, env }).io), 0);
+  assert.equal(await runCli(["shell", "install", "powershell", "--profile", powerShellProfile], capturedIo("", io).io), 0);
 
-  const uninstall = capturedIo("", { home, env });
+  const uninstall = capturedIo("", io);
   assert.equal(await runCli(["uninstall", "--all", "--purge"], uninstall.io), 0);
   const result = JSON.parse(uninstall.stdout()) as {
     results: Array<{ provider: string; removed: boolean }>;

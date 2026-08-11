@@ -14,7 +14,7 @@ test("shell detection accepts only supported interactive shells", () => {
   assert.equal(detectShell({}, "win32"), "powershell");
   assert.equal(detectShell({ SHELL: "" }, "win32"), "powershell");
   assert.equal(detectShell({ SHELL: "/bin/tcsh" }), null);
-  assert.equal(detectShell({}), null);
+  assert.equal(detectShell({}, "linux"), null);
 });
 
 test("PowerShell profiles follow platform conventions and allow the exact host profile", () => {
@@ -49,8 +49,8 @@ test("PowerShell profiles follow platform conventions and allow the exact host p
 });
 
 test("Bash profiles follow Linux and macOS login-shell conventions", () => {
-  assert.equal(shellIntegrationPath("bash", "/users/dev", { platform: "linux" }), "/users/dev/.bashrc");
-  assert.equal(shellIntegrationPath("bash", "/users/dev", { platform: "darwin" }), "/users/dev/.bash_profile");
+  assert.equal(shellIntegrationPath("bash", "/users/dev", { platform: "linux" }), join("/users/dev", ".bashrc"));
+  assert.equal(shellIntegrationPath("bash", "/users/dev", { platform: "darwin" }), join("/users/dev", ".bash_profile"));
 });
 
 test("shell activation and reload guidance are portable and safely quoted", () => {
@@ -94,7 +94,7 @@ test("shell installation refuses malformed or duplicate managed blocks", async (
   const home = await mkdtemp(join(tmpdir(), "isaiokay-shell-"));
   context.after(() => rm(home, { recursive: true, force: true }));
   await writeFile(join(home, ".bashrc"), "# >>> isaiokay automatic questionnaire >>>\n", "utf8");
-  await assert.rejects(installShellIntegration("bash", home), /malformed/i);
+  await assert.rejects(installShellIntegration("bash", home, { platform: "linux" }), /malformed/i);
 });
 
 test("shell status requires the complete generated wrapper to call it current", async (context) => {
