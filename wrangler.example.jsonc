@@ -39,6 +39,9 @@
   "triggers": { "crons": ["*/10 * * * *"] },
   "vars": {
     "BETTER_AUTH_URL": "http://localhost:8787",
+    // Optional public analytics settings. Leave POSTHOG_KEY unset locally.
+    // "POSTHOG_KEY": "phc_your_public_project_key",
+    // "POSTHOG_HOST": "https://eu.i.posthog.com",
     "MOCK_GITHUB_AUTH": "true"
   }
 }

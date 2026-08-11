@@ -94,7 +94,7 @@ const structuredData = item && history ? {
   ]
 } : undefined;
 ---
-<BaseLayout title={pageTitle} description={pageDescription} imageAlt={item ? `${item.name} developer experience, trend, and ratings` : "AI coding model not found"} noindex={!item} structuredData={structuredData}>
+<BaseLayout title={pageTitle} description={pageDescription} imageAlt={item ? `${item.name} developer experience, trend, and ratings` : "AI coding model not found"} noindex={!item} structuredData={structuredData} analytics={Boolean(item)}>
   <div class="model-detail-shell">
     <Header generatedAt={payload.generatedAt} />
     <main id="main-content" class="model-page">

@@ -1,5 +1,8 @@
 ---
 import "../styles/global.css";
+import PostHogAnalytics from "./PostHogAnalytics.astro";
+import { postHogHost, postHogProjectKey } from "../lib/analytics-policy";
+import { getRuntimeEnv } from "../lib/runtime";
 import { serializeJsonForHtml } from "../lib/security";
 import { DEFAULT_SOCIAL_IMAGE_ALT, HOME_PAGE_DESCRIPTION, HOME_PAGE_TITLE } from "../lib/seo";
 
@@ -14,6 +17,7 @@ interface Props {
   type?: "website" | "profile";
   profileUsername?: string;
   structuredData?: Record<string, unknown>;
+  analytics?: boolean;
 }
 const {
   title = HOME_PAGE_TITLE,
@@ -25,8 +29,12 @@ const {
   imageHeight = 630,
   type = "website",
   profileUsername,
-  structuredData
+  structuredData,
+  analytics = false
 } = Astro.props;
+const env = getRuntimeEnv(Astro.locals);
+const postHogKey = analytics ? postHogProjectKey(env.POSTHOG_KEY) : null;
+const postHogApiHost = postHogKey ? postHogHost(env.POSTHOG_HOST) : null;
 const origin = Astro.site ?? new URL("https://isaiokay.com");
 const canonicalUrl = new URL(Astro.url.pathname, origin).toString();
 const socialImage = new URL(image, origin).toString();
@@ -84,6 +92,7 @@ const structuredDataJson = structuredData
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
     {structuredDataJson && <script is:inline type="application/ld+json" set:html={structuredDataJson} />}
+    {postHogKey && postHogApiHost && <PostHogAnalytics apiKey={postHogKey} apiHost={postHogApiHost} />}
     <title>{title}</title>
   </head>
   <body>

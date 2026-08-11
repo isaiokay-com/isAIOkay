@@ -1,0 +1,61 @@
+---
+import { serializeJsonForHtml } from "../lib/security";
+
+interface Props {
+  apiKey: string;
+  apiHost: string;
+}
+
+const config = serializeJsonForHtml(Astro.props satisfies Props);
+---
+<script is:inline id="posthog-analytics-config" type="application/json" set:html={config} />
+<script>
+  import posthog from "posthog-js/dist/module.slim";
+  import { isAnalyticsPath, publicAnalyticsUrl } from "../lib/analytics-policy";
+  import type { AnalyticsEvents } from "../lib/analytics";
+
+  const configNode = document.querySelector<HTMLScriptElement>("#posthog-analytics-config");
+  const config = configNode ? JSON.parse(configNode.textContent ?? "null") as { apiKey?: string; apiHost?: string } | null : null;
+
+  if (config?.apiKey && config.apiHost && isAnalyticsPath(window.location.pathname)) {
+    posthog.init(config.apiKey, {
+      api_host: config.apiHost,
+      defaults: "2026-06-25",
+      cookieless_mode: "always",
+      person_profiles: "never",
+      autocapture: false,
+      rageclick: false,
+      capture_pageview: true,
+      capture_pageleave: false,
+      save_referrer: true,
+      save_campaign_params: true,
+      disable_session_recording: true,
+      capture_performance: false,
+      capture_heatmaps: false,
+      capture_dead_clicks: false,
+      capture_exceptions: false,
+      disable_surveys: true,
+      disable_surveys_automatic_display: true,
+      disable_product_tours: true,
+      advanced_disable_flags: true,
+      disableDeviceModel: true,
+      disable_capture_url_hashes: true,
+      before_send: (event) => {
+        if (!event || !isAnalyticsPath(window.location.pathname)) return null;
+        const properties = { ...event.properties };
+        for (const key of ["$current_url", "$initial_current_url", "$session_entry_url", "$referrer", "$initial_referrer"] as const) {
+          const sanitized = publicAnalyticsUrl(properties[key]);
+          if (sanitized) properties[key] = sanitized;
+          else delete properties[key];
+        }
+        return { ...event, properties };
+      }
+    });
+
+    window.isAIokayAnalytics = {
+      capture: <Name extends keyof AnalyticsEvents>(name: Name, properties: AnalyticsEvents[Name]) => {
+        if (isAnalyticsPath(window.location.pathname)) posthog.capture(name, properties);
+      }
+    };
+  }
+</script>

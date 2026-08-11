@@ -6,25 +6,31 @@ import { spawnSync } from "node:child_process";
 const directory = await mkdtemp(join(tmpdir(), "isaiokay-production-config-"));
 const outputPath = join(directory, "wrangler.jsonc");
 const turnstileSiteKey = "0x4AAAAAA_test_site_key";
+const postHogKey = "phc_test_public_project_key";
 
 try {
-  const result = spawnSync(process.execPath, ["scripts/prepare-cloudflare-config.mjs"], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      WRANGLER_CONFIG_OUTPUT: outputPath,
-      CLOUDFLARE_DATABASE_ID: "00000000-0000-4000-8000-000000000001",
-      CLOUDFLARE_KV_NAMESPACE_ID: "00000000000000000000000000000001",
-      TURNSTILE_SITE_KEY: turnstileSiteKey,
-    },
-  });
-  if (result.status !== 0) {
-    throw new Error(result.stderr || result.stdout || "Production config generation failed.");
-  }
+  const generateConfig = async (analytics) => {
+    const result = spawnSync(process.execPath, ["scripts/prepare-cloudflare-config.mjs"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        WRANGLER_CONFIG_OUTPUT: outputPath,
+        CLOUDFLARE_DATABASE_ID: "00000000-0000-4000-8000-000000000001",
+        CLOUDFLARE_KV_NAMESPACE_ID: "00000000000000000000000000000001",
+        TURNSTILE_SITE_KEY: turnstileSiteKey,
+        POSTHOG_KEY: analytics ? postHogKey : "",
+        POSTHOG_HOST: analytics ? "https://eu.i.posthog.com" : "",
+      },
+    });
+    if (result.status !== 0) {
+      throw new Error(result.stderr || result.stdout || "Production config generation failed.");
+    }
+    const source = await readFile(outputPath, "utf8");
+    return JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  };
 
-  const source = await readFile(outputPath, "utf8");
-  const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  const config = await generateConfig(true);
   const requiredSecrets = new Set(config.secrets?.required ?? []);
   const variables = new Set(Object.keys(config.vars ?? {}));
   const duplicateBindings = [...requiredSecrets].filter((name) => variables.has(name));
@@ -37,6 +43,14 @@ try {
   }
   if (config.vars?.TURNSTILE_SITE_KEY !== turnstileSiteKey) {
     throw new Error("TURNSTILE_SITE_KEY was not injected into Worker vars.");
+  }
+  if (config.vars?.POSTHOG_KEY !== postHogKey || config.vars?.POSTHOG_HOST !== "https://eu.i.posthog.com") {
+    throw new Error("PostHog public configuration was not injected into Worker vars.");
+  }
+
+  const analyticsDisabledConfig = await generateConfig(false);
+  if (analyticsDisabledConfig.vars?.POSTHOG_KEY !== undefined || analyticsDisabledConfig.vars?.POSTHOG_HOST !== undefined) {
+    throw new Error("Optional PostHog configuration must remain absent when no project key is provided.");
   }
 
   process.stdout.write("Production Wrangler configuration check passed.\n");

@@ -25,6 +25,16 @@ const turnstileSiteKey = requiredIdentifier(
   "TURNSTILE_SITE_KEY",
   /^0x[A-Za-z0-9_-]{10,100}$/,
 );
+const postHogKey = process.env.POSTHOG_KEY?.trim();
+if (postHogKey && !/^phc_[A-Za-z0-9_-]{10,}$/.test(postHogKey)) {
+  throw new Error("POSTHOG_KEY is malformed.");
+}
+const postHogHost = postHogKey
+  ? process.env.POSTHOG_HOST?.trim().replace(/\/$/, "") || "https://eu.i.posthog.com"
+  : undefined;
+if (postHogHost && !["https://eu.i.posthog.com", "https://us.i.posthog.com"].includes(postHogHost)) {
+  throw new Error("POSTHOG_HOST must be a supported PostHog Cloud ingestion origin.");
+}
 
 let config = await readFile(templatePath, "utf8");
 
@@ -58,7 +68,7 @@ replaceOnce(
 );
 replaceOnce(
   '"MOCK_GITHUB_AUTH": "true"',
-  `"MOCK_GITHUB_AUTH": "false",\n    "TURNSTILE_SITE_KEY": "${turnstileSiteKey}"`,
+  `"MOCK_GITHUB_AUTH": "false",\n    "TURNSTILE_SITE_KEY": "${turnstileSiteKey}"${postHogKey ? `,\n    "POSTHOG_KEY": "${postHogKey}",\n    "POSTHOG_HOST": "${postHogHost}"` : ""}`,
 );
 
 await writeFile(outputPath, config, { mode: 0o600 });

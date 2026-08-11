@@ -14,6 +14,8 @@ export interface Env {
   GITHUB_CLIENT_SECRET?: string;
   TURNSTILE_SECRET_KEY?: string;
   TURNSTILE_SITE_KEY?: string;
+  POSTHOG_KEY?: string;
+  POSTHOG_HOST?: string;
   MOCK_GITHUB_AUTH?: string;
   ADMIN_GITHUB_USER_IDS?: string;
 }

@@ -21,6 +21,15 @@ as a public Worker variable:
 | `CLOUDFLARE_KV_NAMESPACE_ID` | Production `PUBLIC_CACHE` KV namespace ID. |
 | `TURNSTILE_SITE_KEY` | Matching public Turnstile site key, injected into Wrangler `vars`. It is stored as an environment secret only to keep all deployment assignments out of the public repository. |
 
+Add these non-secret variables to the `production` environment:
+
+| Variable | Purpose |
+| --- | --- |
+| `POSTHOG_KEY` | Optional public PostHog project key (`phc_...`). Analytics remains disabled when omitted. |
+| `POSTHOG_HOST` | PostHog Cloud ingestion origin. Use `https://eu.i.posthog.com` (default) or `https://us.i.posthog.com` to match the project region. |
+
+Before setting `POSTHOG_KEY`, enable cookieless web analytics in that PostHog project's settings. The client deliberately uses cookieless mode; PostHog discards those events when the project-level setting is disabled. The integration records page views and a small allowlist of explicit product events only. Session replay, page-leave capture, autocapture, heatmaps, surveys, feature flags, performance capture, and automatic error capture are disabled in code.
+
 The workflow generates an ephemeral production `wrangler.jsonc`, applies D1
 migrations and the idempotent production bootstrap, and deploys Astro's
 generated `dist/server/wrangler.json` manifest. It never puts production
@@ -80,6 +89,8 @@ wrangler secret put GITHUB_CLIENT_SECRET
 wrangler secret put TURNSTILE_SECRET_KEY
 
 # configure non-secret canonical URL/site key in Wrangler vars, then deploy
+# optionally add POSTHOG_KEY and POSTHOG_HOST to Wrangler vars after enabling
+# cookieless mode in the matching PostHog Cloud project
 npm run deploy
 ```
 

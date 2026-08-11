@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authClient } from "../../lib/auth-client";
+import { captureAnalytics } from "../../lib/analytics";
 import type { FeedbackAllowance } from "../../types";
 
 interface ItemOption { id: string; slug: string; name: string; providerName: string; }
@@ -47,6 +48,7 @@ export default function FeedbackDialog({ items, agents, initialSlug }: Props) {
   const selectedItem = useMemo(() => items.find((item) => item.slug === selectedSlug) ?? null, [items, selectedSlug]);
 
   const open = async (slug: string) => {
+    captureAnalytics("feedback_opened", { model: slug });
     setSelectedSlug(slug);
     setError(null);
     setNotice(null);
@@ -113,6 +115,7 @@ export default function FeedbackDialog({ items, agents, initialSlug }: Props) {
   }, [info]);
 
   const signIn = async () => {
+    captureAnalytics("feedback_sign_in_started", { model: selectedSlug });
     await authClient.signIn.social({ provider: "github", callbackURL: `${window.location.pathname}?feedback=${encodeURIComponent(selectedSlug ?? "")}` });
   };
 
@@ -149,6 +152,7 @@ export default function FeedbackDialog({ items, agents, initialSlug }: Props) {
       setToken(null);
       setInfo(null);
       dialogRef.current?.close();
+      captureAnalytics("feedback_submitted", { model: selectedItem.slug });
       setNotice({ allowance: body.allowance });
     } catch {
       setError("Your feedback could not be saved. Check your connection and try again.");

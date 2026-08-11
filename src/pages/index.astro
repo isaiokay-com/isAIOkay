@@ -92,7 +92,7 @@ const structuredData = {
   ]
 };
 ---
-<BaseLayout title={pageTitle} description={pageDescription} imageAlt="AI coding model rankings based on recent ratings from real developers" structuredData={structuredData}>
+<BaseLayout title={pageTitle} description={pageDescription} imageAlt="AI coding model rankings based on recent ratings from real developers" structuredData={structuredData} analytics>
   <div class="landing-page">
     <Header generatedAt={payload.generatedAt} />
     <main id="main-content">
@@ -119,7 +119,7 @@ const structuredData = {
                 </div>
                 <div id="cli-install-command" class="cli-command" role="tabpanel" aria-labelledby="cli-package-npm">
                   <code data-cli-install-command>npm install --global @isaiokay/cli</code>
-                  <button type="button" class="cli-copy-button" data-copy-command aria-label="Copy install command"><span aria-live="polite">Copy</span></button>
+                  <button type="button" class="cli-copy-button" data-copy-command data-analytics-command="install" aria-label="Copy install command"><span aria-live="polite">Copy</span></button>
                 </div>
                 <p class="cli-step-note"><span aria-hidden="true">#</span>Same CLI via npm, pnpm, or Bun.</p>
                 <p class="cli-step-next" data-cli-next hidden>Copy to reveal next step <span aria-hidden="true">↓</span></p>
@@ -128,7 +128,7 @@ const structuredData = {
                 <span class="cli-step-label"><b>02</b>Run onboarding</span>
                 <div class="cli-command">
                   <code>isaiokay</code>
-                  <button type="button" class="cli-copy-button" data-copy-command aria-label="Copy onboarding command"><span aria-live="polite">Copy</span></button>
+                  <button type="button" class="cli-copy-button" data-copy-command data-analytics-command="onboarding" aria-label="Copy onboarding command"><span aria-live="polite">Copy</span></button>
                 </div>
                 <p class="cli-step-note"><span aria-hidden="true">#</span>Sign in with GitHub, connect detected coding CLIs, and enable automatic questionnaires.</p>
                 <p class="cli-step-next" data-cli-next hidden>Copy to reveal next step <span aria-hidden="true">↓</span></p>
@@ -137,7 +137,7 @@ const structuredData = {
                 <span class="cli-step-label"><b>03</b>Use your normal CLI</span>
                 <div class="cli-command cli-command--ready">
                   <code>codex</code>
-                  <button type="button" class="cli-copy-button" data-copy-command aria-label="Copy example harness command"><span aria-live="polite">Copy</span></button>
+                  <button type="button" class="cli-copy-button" data-copy-command data-analytics-command="example_agent" aria-label="Copy example harness command"><span aria-live="polite">Copy</span></button>
                 </div>
                 <p class="cli-step-note"><span aria-hidden="true">#</span>Keep using Codex, Claude, Cursor, or another harness. Eligible questionnaires open after a session.</p>
               </li>
@@ -156,7 +156,7 @@ const structuredData = {
                   <strong>Headless setup</strong>
                   <div class="cli-command">
                     <code>isaiokay setup --headless</code>
-                    <button type="button" class="cli-copy-button" data-copy-command aria-label="Copy headless setup command"><span aria-live="polite">Copy</span></button>
+                    <button type="button" class="cli-copy-button" data-copy-command data-analytics-command="headless_setup" aria-label="Copy headless setup command"><span aria-live="polite">Copy</span></button>
                   </div>
                   <p><span aria-hidden="true">#</span>Open the link on any device. First-time auth still needs GitHub in a browser.</p>
                 </div>
@@ -164,7 +164,7 @@ const structuredData = {
                   <strong>Connect everything detected</strong>
                   <div class="cli-command">
                     <code>isaiokay install --all</code>
-                    <button type="button" class="cli-copy-button" data-copy-command aria-label="Copy install-all command"><span aria-live="polite">Copy</span></button>
+                    <button type="button" class="cli-copy-button" data-copy-command data-analytics-command="install_all" aria-label="Copy install-all command"><span aria-live="polite">Copy</span></button>
                   </div>
                   <p><span aria-hidden="true">#</span>Install every supported, unconfigured integration.</p>
                 </div>
@@ -172,7 +172,7 @@ const structuredData = {
                   <strong>Preview without installing</strong>
                   <div class="cli-command">
                     <code>npx --yes @isaiokay/cli --help</code>
-                    <button type="button" class="cli-copy-button" data-copy-command aria-label="Copy one-shot preview command"><span aria-live="polite">Copy</span></button>
+                    <button type="button" class="cli-copy-button" data-copy-command data-analytics-command="preview" aria-label="Copy one-shot preview command"><span aria-live="polite">Copy</span></button>
                   </div>
                   <p class="cli-runner-alternatives"><span aria-hidden="true">#</span>Also: <code>pnpm dlx @isaiokay/cli --help</code> or <code>bunx @isaiokay/cli --help</code>.</p>
                 </div>
@@ -195,6 +195,8 @@ const structuredData = {
     <FeedbackDialog client:load items={payload.items.map((item) => ({ id: item.id, slug: item.slug, name: item.name, providerName: item.providerName }))} agents={agents} initialSlug={feedbackItem} />
   </div>
   <script>
+    import { captureAnalytics } from "../lib/analytics";
+
     const resetCopyButton = (button: HTMLButtonElement): void => {
       button.disabled = false;
       button.dataset.state = "default";
@@ -272,6 +274,8 @@ const structuredData = {
           await navigator.clipboard.writeText(text);
           button.dataset.state = "success";
           if (label) label.textContent = "Copied";
+          const analyticsCommand = button.dataset.analyticsCommand as "install" | "onboarding" | "example_agent" | "headless_setup" | "install_all" | "preview" | undefined;
+          if (analyticsCommand) captureAnalytics("cli_command_copied", { command: analyticsCommand });
           revealNextStep(button);
         } catch {
           const range = document.createRange();
