@@ -147,6 +147,11 @@ terminal, detected harness executables are transparently routed through the
 foreground collector; users continue typing `codex`, `claude`, `agent`,
 `gemini`, `opencode`, and the other normal commands. The onboarding flow offers this
 setup explicitly, and `isaiokay shell uninstall` removes only the managed block.
+The install command prints the exact `source`/dot command needed to activate the
+wrapper in the current terminal. `isaiokay shell status` distinguishes installed
+configuration from an active wrapper, and `isaiokay status` and `isaiokay doctor`
+surface the same activation state. Older managed blocks are reported as needing
+a refresh; rerun `isaiokay shell install` and then use the printed reload command.
 
 `isaiokay uninstall --all` removes all IsAIokay.com-owned provider handlers and
 every registered or standard managed shell wrapper, then prints the package-manager
@@ -170,6 +175,10 @@ random session identifier, persists only its HMAC plus start/end timestamps,
 launches the requested harness with inherited stdio, and evaluates the normal
 prompt policy once that process exits. When the session is eligible, the
 interactive questionnaire opens in the terminal that the harness just released.
+Every harness exit remains eligible while the wrapper's terminal is usable,
+including Ctrl-C on Linux/macOS, Ctrl-C or Ctrl+Break on Windows, nonzero exits,
+and harness crashes. Shutdown signals received by the wrapper itself, such as
+SIGHUP and SIGTERM, do not open a questionnaire.
 If input or output is redirected, the wrapper passes the harness through without
 collecting a foreground session or opening a questionnaire, so pipelines,
 scripts, and output redirection keep their normal behavior.
@@ -206,7 +215,7 @@ the original harness exit status is returned unchanged.
   ❯ Model                               ‹ Claude Sonnet 5 (Anthropic) ›
     How good was the result?            ‹ 3 — Okay ›
     Did progress feel worth the usage?  ‹ 3 — About expected ›
-  ↑/↓ field · ←/→ change · Enter send · Esc skip today
+  ↑/↓ field · ←/→ change · 1–5 rate · Enter send · Esc skip today
 ```
 
 The interactive flow keeps the model on this same screen and starts on an exact
@@ -220,6 +229,7 @@ unspecified, and session timing supplies recency. The flow never asks for typed
 text. Optional tags and comments are advanced flag-only fields. Piped or CI
 execution never prompts; automation can use `--result-quality`,
 `--usage-efficiency`, and `--item`, and can request JSON output.
+On either rating row, pressing `1` through `5` selects that score directly.
 
 Running `isaiokay` without a subcommand starts onboarding on a fresh interactive
 installation. Once onboarding is complete, it starts the rating flow when a
@@ -228,6 +238,19 @@ and the next useful command. A non-interactive empty invocation prints help and
 never prompts. Status checks supported executables on `PATH`; detected tools
 without an installed integration are listed with their exact installation
 commands.
+
+`isaiokay status`, `isaiokay prompt status`, and `isaiokay rate show` use the
+same reminder decision and timing fields. Status reports lifecycle `eventCount`
+for JSON compatibility and adds the user-facing `sessionCount`; pending counts
+follow the same pattern. A prompt slot is reserved atomically only for an
+interactive attempt and is released if authentication, catalog loading, or
+other setup fails before the form can be completed, so a transient failure cannot consume
+the day's questionnaire. Redirected and `--no-input` checks never reserve it.
+
+`isaiokay doctor` prints repair commands only for registered automatic provider
+integrations that are actually missing. It also reports whether the shell
+wrapper is absent, stale, installed-but-not-loaded, or active, with the relevant
+install, refresh, or reload command.
 
 The repository installer requires Node 22+, downloads the selected public GitHub source archive into a temporary directory, installs locked dependencies with lifecycle scripts disabled, builds only the CLI, and installs that local package globally. Set `ISAIOKAY_REF` to pin a tag or commit.
 

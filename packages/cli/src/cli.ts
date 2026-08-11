@@ -4,10 +4,10 @@ import { homedir } from "node:os";
 import { doctorAdapter, installAdapter, uninstallAdapter } from "./adapters.js";
 import { ApiError, approveDeviceLogin, getAllowance, getCliTurnstileChallenge, getTrackedItems, isUuid, normalizeSameOriginWebUrl, pollDeviceLogin, revokeCredential, startDeviceLogin, submitFeedback } from "./api.js";
 import { normalizeProviderEvent } from "./normalizers.js";
-import { decidePrompt } from "./prompt-policy.js";
+import { pendingSessionCount, recordedSessionCount, reminderStatus, type ReminderStatus } from "./prompt-policy.js";
 import { createEventId, MAX_INPUT_BYTES, safeEventSummary, sessionHash as hashSession } from "./privacy.js";
 import { LocalStore, resolveStoragePaths } from "./storage.js";
-import { defaultHarnessCommand, detectShell, installShellIntegration, renderShellIntegration, shellIntegrationInstalled, shellIntegrationPath, SUPPORTED_SHELLS, uninstallShellIntegration, type SupportedShell } from "./shell-integration.js";
+import { defaultHarnessCommand, detectShell, getShellIntegrationStatus, installShellIntegration, isSafeShellPath, renderShellIntegration, shellIntegrationActive, shellIntegrationInstalled, shellIntegrationPath, shellReloadCommand, SUPPORTED_SHELLS, uninstallShellIntegration, type SupportedShell } from "./shell-integration.js";
 import { summarizeSession } from "./session-summary.js";
 import type { TerminalChoice, TerminalFormField } from "./terminal.js";
 import { PROVIDERS, type ApiTrackedItem, type CliCredential, type Provider, type StoredEvent } from "./types.js";
@@ -32,7 +32,10 @@ export interface CliIo {
   select?: (question: string, choices: readonly TerminalChoice[], options?: { initialValue?: string; color?: boolean }) => Promise<string | undefined>;
   selectMany?: (question: string, choices: readonly TerminalChoice[], options?: { initialValues?: string[]; color?: boolean; maxSelections?: number }) => Promise<string[] | undefined>;
   form?: (title: string, fields: readonly TerminalFormField[], options?: { color?: boolean; submitLabel?: string; cancelLabel?: string }) => Promise<Record<string, string> | undefined>;
-  runCommand?: (command: string, args: string[], env: NodeJS.ProcessEnv) => Promise<{ exitCode: number; signal: NodeJS.Signals | null }>;
+  runCommand?: (command: string, args: string[], env: NodeJS.ProcessEnv) => Promise<{
+    exitCode: number;
+    wrapperShuttingDown: boolean;
+  }>;
   createId?: () => string;
 }
 
@@ -259,9 +262,9 @@ const detectSetupProviders = async (
 const COMMAND_HELP: Record<string, { summary: string; usage: string[]; notes?: string[] }> = {
   setup: { summary: "Sign in and connect detected coding tools.", usage: ["isaiokay", "isaiokay setup", "isaiokay setup --headless"], notes: ["A fresh interactive installation starts this flow when you run `isaiokay` with no arguments."] },
   login: { summary: "Sign in with a short-lived browser code.", usage: ["isaiokay login", "isaiokay login --headless", "isaiokay login --no-setup", "isaiokay login --json"] },
-  rate: { summary: "Rate the most recent eligible AI coding session.", usage: ["isaiokay rate", "isaiokay rate submit --result-quality 4 --usage-efficiency 3 --item <slug>", "isaiokay rate show", "isaiokay rate defer <seconds>"], notes: ["Interactive ratings use one keyboard-driven screen and require no typing. Esc skips today without submitting."] },
-  status: { summary: "Show authentication, integrations, and pending sessions.", usage: ["isaiokay status", "isaiokay status --json"] },
-  doctor: { summary: "Check installed provider integrations.", usage: ["isaiokay doctor", "isaiokay doctor codex"] },
+  rate: { summary: "Rate the most recent eligible AI coding session.", usage: ["isaiokay rate", "isaiokay rate submit --result-quality 4 --usage-efficiency 3 --item <slug>", "isaiokay rate show", "isaiokay rate defer <seconds>"], notes: ["Interactive ratings use one keyboard-driven screen and require no typing. Press 1–5 on a rating row; Esc skips today without submitting."] },
+  status: { summary: "Show authentication, integrations, shell activation, and check-in readiness.", usage: ["isaiokay status", "isaiokay status --json"] },
+  doctor: { summary: "Check provider integrations and shell activation.", usage: ["isaiokay doctor", "isaiokay doctor codex"] },
   install: { summary: "Install one provider or every detected automatic integration.", usage: ["isaiokay install --all", "isaiokay install codex"] },
   uninstall: {
     summary: "Remove only integration entries owned by IsAIokay.com.",
@@ -293,7 +296,7 @@ const COMMAND_HELP: Record<string, { summary: string; usage: string[]; notes?: s
       "isaiokay shell init zsh",
       "isaiokay shell install powershell --profile <CurrentUserAllHosts>"
     ],
-    notes: ["Install writes one clearly marked, removable block to the detected shell startup file. PowerShell users can pass $PROFILE.CurrentUserAllHosts exactly."]
+    notes: ["Install writes one clearly marked, removable block and prints the exact reload command. Status distinguishes installed configuration from an active wrapper. PowerShell users can pass $PROFILE.CurrentUserAllHosts exactly."]
   },
   hook: { summary: "Accept a machine-readable provider lifecycle event.", usage: ["isaiokay hook --provider codex < event.json"], notes: ["Hook output is always JSON and never prompts."] }
 };
@@ -465,6 +468,20 @@ const nextLocalDay = (now: number): number => {
   return tomorrow.getTime();
 };
 
+const reminderStatusLabel = (status: ReminderStatus): string => {
+  if (status.eligible) return "Ready now";
+  if (status.reason === "disabled") return "Off";
+  if (status.reason === "cooldown" && status.nextAllowedAt !== null) {
+    return `Deferred until ${new Date(status.nextAllowedAt).toLocaleString()}`;
+  }
+  if (status.reason === "daily_cap") return "Done for today";
+  if (status.pendingSessionCountToday === 0) return "No eligible session today";
+  const minutes = Math.max(1, Math.ceil(status.remainingExperienceMs / 60_000));
+  return `Needs ${minutes} more minute${minutes === 1 ? "" : "s"}`;
+};
+
+const experiencedMinutes = (status: ReminderStatus): number => Math.floor(status.experiencedMs / 60_000);
+
 const runHook = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<number> => {
   const result = (body: Record<string, unknown>, systemMessage?: string): void => {
     writeJson(io, systemMessage ? { systemMessage } : parsed.flags.has("quiet") ? {} : body);
@@ -571,7 +588,7 @@ const runHarness = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Pro
     sessionHash = null;
   }
 
-  let harnessResult: { exitCode: number; signal: NodeJS.Signals | null };
+  let harnessResult: { exitCode: number; wrapperShuttingDown: boolean };
   try {
     harnessResult = await io.runCommand(command, parsed.passthrough, {
       ...(io.env ?? process.env),
@@ -592,7 +609,10 @@ const runHarness = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Pro
         wrapperEvent(provider, sessionHash, startedAt, createId()),
         wrapperEvent(provider, sessionHash, endedAt, createId())
       ]);
-      if (harnessResult.signal === null && harnessResult.exitCode !== 130) {
+      // Prompt after any completed harness exit, including Ctrl-C, Ctrl+Break,
+      // non-zero statuses, and crashes. Only a shutdown signal received by this
+      // wrapper means the foreground terminal itself may no longer be usable.
+      if (!harnessResult.wrapperShuttingDown) {
         const promptFlags = new Map(
           [...parsed.flags].filter(([flag]) => (GLOBAL_FLAGS as readonly string[]).includes(flag))
         );
@@ -600,7 +620,7 @@ const runHarness = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Pro
           { command: "prompt", positionals: [], passthrough: [], flags: promptFlags },
           store,
           io,
-          { silentWhenIneligible: true }
+          { silentWhenUnavailable: true }
         );
       }
     } catch (error) {
@@ -640,8 +660,11 @@ const runShellIntegration = async (parsed: ParsedArgs, store: LocalStore, io: Cl
     return 1;
   }
   const profilePath = flagText(parsed.flags, "profile");
-  if ((parsed.flags.has("profile") && profilePath === undefined) || (profilePath !== undefined && shell !== "powershell")) {
-    writeArgumentError(parsed, io, "--profile requires a PowerShell profile path.", "invalid_shell_profile");
+  if (
+    (parsed.flags.has("profile") && profilePath === undefined)
+    || (profilePath !== undefined && (shell !== "powershell" || !isSafeShellPath(profilePath)))
+  ) {
+    writeArgumentError(parsed, io, "--profile requires an absolute, control-free PowerShell profile path.", "invalid_shell_profile");
     return 1;
   }
   if (operation === "init") {
@@ -650,14 +673,31 @@ const runShellIntegration = async (parsed: ParsedArgs, store: LocalStore, io: Cl
   }
 
   const home = io.home ?? homedir();
-  const options = { env, platform, ...(profilePath === undefined ? {} : { profilePath }) };
+  const registeredShell = shell === "powershell"
+    ? (await store.getConfig()).shellIntegrations.findLast((entry) => entry.shell === shell)
+    : undefined;
+  const resolvedProfilePath = profilePath ?? registeredShell?.path;
+  const options = { env, platform, ...(resolvedProfilePath === undefined ? {} : { profilePath: resolvedProfilePath }) };
   try {
     if (operation === "status") {
-      const installed = await shellIntegrationInstalled(shell, home, options);
+      const status = await getShellIntegrationStatus(shell, home, options);
       const path = shellIntegrationPath(shell, home, options);
-      writeResult(parsed, io, { shell, path, installed }, (style) => {
+      const active = status.current && shellIntegrationActive(env, shell);
+      const refreshCommand = status.installed && !status.current ? `isaiokay shell install ${shell}` : null;
+      const reloadCommand = status.current && !active ? shellReloadCommand(shell, path) : null;
+      writeResult(parsed, io, { shell, path, ...status, active, refreshCommand, reloadCommand }, (style) => {
         io.stdout.write(`\n  ${style.bold(style.cyan("Automatic questionnaire"))}\n`);
-        io.stdout.write(`  ${installed ? style.green("✓ Installed") : style.dim("Not installed")}  ${path}\n\n`);
+        const label = active
+          ? style.green("✓ Active")
+          : !status.installed
+            ? style.dim("Not installed")
+            : !status.current
+              ? style.yellow("! Refresh needed")
+              : style.yellow("! Installed, not active in this terminal");
+        io.stdout.write(`  ${label}  ${path}\n`);
+        if (refreshCommand) io.stdout.write(`  Run ${style.cyan(refreshCommand)}, then reload your shell.\n`);
+        else if (reloadCommand) io.stdout.write(`  Run ${style.cyan(reloadCommand)} to activate it here.\n`);
+        io.stdout.write("\n");
       });
       return 0;
     }
@@ -668,11 +708,13 @@ const runShellIntegration = async (parsed: ParsedArgs, store: LocalStore, io: Cl
     const installed = operation === "install";
     if (installed) await store.registerShellIntegration(shell, result.path);
     else await store.unregisterShellIntegration(result.path);
-    writeResult(parsed, io, { shell, path: result.path, installed, changed: result.changed }, (style) => {
-      const action = installed ? "Automatic questionnaires enabled." : "Automatic questionnaires disabled.";
+    const active = installed && !result.changed && shellIntegrationActive(env, shell);
+    const reloadCommand = installed && !active ? shellReloadCommand(shell, result.path) : null;
+    writeResult(parsed, io, { shell, path: result.path, installed, changed: result.changed, active, reloadCommand }, (style) => {
+      const action = installed ? "Automatic questionnaires installed." : "Automatic questionnaires disabled.";
       io.stdout.write(`\n  ${style.green("✓")} ${style.bold(action)}\n`);
       io.stdout.write(`  ${style.dim(result.path)}\n`);
-      if (result.changed) io.stdout.write(`  ${style.dim("Open a new terminal for the change to take effect.")}\n`);
+      if (reloadCommand) io.stdout.write(`  Run ${style.cyan(reloadCommand)} to activate it in this terminal.\n`);
       if (installed) io.stdout.write(`  Keep using ${style.cyan("codex")}, ${style.cyan("claude")}, ${style.cyan("agent")}, and your other normal commands.\n`);
       io.stdout.write("\n");
     });
@@ -714,9 +756,28 @@ const runConfig = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Prom
 };
 
 const runStatus = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<number> => {
+  const now = io.now?.() ?? Date.now();
+  const env = io.env ?? process.env;
+  const platform = io.platform ?? process.platform;
+  const home = io.home ?? homedir();
   const [config, state, credential] = await Promise.all([store.getConfig(), store.getState(), store.getCredential()]);
   const detected = loginUsesHumanOutput(parsed, io) ? await detectSetupProviders(io, config.adapters) : [];
-  const authenticated = credential !== null && credential.expiresAt > (io.now?.() ?? Date.now());
+  const authenticated = credential !== null && credential.expiresAt > now;
+  const prompt = reminderStatus(state, now);
+  const shell = detectShell(env, platform);
+  const registeredShell = shell ? config.shellIntegrations.findLast((entry) => entry.shell === shell) : undefined;
+  const shellOptions = { env, platform, ...(shell === "powershell" && registeredShell ? { profilePath: registeredShell.path } : {}) };
+  let shellInspectionFailed = false;
+  const shellStatus = shell ? await getShellIntegrationStatus(shell, home, shellOptions).catch(() => {
+    shellInspectionFailed = true;
+    return { installed: false, current: false };
+  }) : null;
+  const shellInstalled = shellStatus?.installed ?? false;
+  const shellCurrent = shellStatus?.current ?? false;
+  const shellActive = shellCurrent && shell !== null && shellIntegrationActive(env, shell);
+  const shellPath = shell ? shellIntegrationPath(shell, home, shellOptions) : null;
+  const reloadCommand = shell && shellPath && shellCurrent && !shellActive ? shellReloadCommand(shell, shellPath) : null;
+  const refreshCommand = shellInstalled && !shellCurrent ? `isaiokay shell install ${shell}` : null;
   const body = {
     schemaVersion: 1,
     authenticated,
@@ -724,9 +785,12 @@ const runStatus = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Prom
     adapters: Object.keys(config.adapters).sort(),
     eventCount: state.events.length,
     pendingCount: state.pendingEventIds.length,
+    sessionCount: recordedSessionCount(state),
+    pendingSessionCount: pendingSessionCount(state),
     nextAllowedAt: state.rate.nextAllowedAt,
-    prompt: decidePrompt(state, io.now?.() ?? Date.now()),
-    promptsDisabled: state.rate.promptsDisabled
+    prompt,
+    promptsDisabled: state.rate.promptsDisabled,
+    shell: shell ? { name: shell, path: shellPath, installed: shellInstalled, current: shellCurrent, active: shellActive, inspectionFailed: shellInspectionFailed, refreshCommand, reloadCommand } : null
   };
   writeResult(parsed, io, body, (style) => {
     io.stdout.write(`\n  ${style.bold(style.cyan("IsAIokay.com"))}\n\n`);
@@ -734,14 +798,32 @@ const runStatus = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Prom
     if (body.serverUrl) io.stdout.write(`  Server        ${body.serverUrl}\n`);
     io.stdout.write(`  Integrations  ${body.adapters.length > 0 ? body.adapters.join(", ") : "None installed"}\n`);
     if (detected.length > 0) io.stdout.write(`  Detected      ${detected.map(({ label }) => label).join(", ")}\n`);
-    io.stdout.write(`  Sessions      ${body.eventCount} recorded · ${body.pendingCount} pending\n`);
-    io.stdout.write(`  Reminders     ${body.promptsDisabled ? "Off" : "On"}\n`);
-    if (!authenticated || detected.length > 0) io.stdout.write(`\n  ${style.bold("Suggested next steps")}\n`);
+    io.stdout.write(`  Sessions      ${body.sessionCount} recorded · ${body.pendingSessionCount} pending\n`);
+    io.stdout.write(`  Check-in      ${reminderStatusLabel(prompt)}\n`);
+    io.stdout.write(`  Experience    ${experiencedMinutes(prompt)} minutes today\n`);
+    if (body.shell) {
+      const shellState = body.shell.inspectionFailed
+        ? style.yellow("Check failed")
+        : body.shell.active
+          ? style.green("Active")
+          : !body.shell.installed
+            ? style.dim("Not installed")
+            : !body.shell.current
+              ? style.yellow("Refresh needed")
+              : style.yellow("Installed, reload needed");
+      io.stdout.write(`  Shell wrapper ${shellState}\n`);
+    }
+    const hasNextSteps = !authenticated || detected.length > 0 || shellInspectionFailed || refreshCommand !== null || reloadCommand !== null || (shell !== null && !shellInstalled);
+    if (hasNextSteps) io.stdout.write(`\n  ${style.bold("Suggested next steps")}\n`);
     if (!authenticated) io.stdout.write(`    ${style.cyan("isaiokay login")}\n`);
     if (detected.length > 1) io.stdout.write(`    ${style.cyan("isaiokay install --all")}  ${style.dim("Install every detected integration")}\n`);
     for (const { provider, label } of detected) {
       io.stdout.write(`    ${style.cyan(`isaiokay install ${provider}`)}  ${style.dim(`Install the ${label} integration`)}\n`);
     }
+    if (shellInspectionFailed) io.stdout.write(`    ${style.cyan("isaiokay shell status")}  ${style.dim("Inspect the shell integration error")}\n`);
+    else if (refreshCommand) io.stdout.write(`    ${style.cyan(refreshCommand)}  ${style.dim("Refresh the shell wrapper")}\n`);
+    else if (reloadCommand) io.stdout.write(`    ${style.cyan(reloadCommand)}  ${style.dim("Activate automatic questionnaires here")}\n`);
+    else if (shell !== null && !shellInstalled) io.stdout.write(`    ${style.cyan("isaiokay shell install")}  ${style.dim("Enable automatic questionnaires")}\n`);
     io.stdout.write("\n");
   });
   return 0;
@@ -751,7 +833,7 @@ const runPending = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Pro
   const operation = parsed.positionals[0] ?? "list";
   if (operation === "clear") {
     const state = await store.clearPending();
-    const body = { cleared: true, pendingCount: state.pendingEventIds.length };
+    const body = { cleared: true, pendingCount: state.pendingEventIds.length, pendingSessionCount: pendingSessionCount(state) };
     writeResult(parsed, io, body, (style) => io.stdout.write(`\n  ${style.green("✓")} Pending sessions cleared.\n\n`));
     return 0;
   }
@@ -760,10 +842,10 @@ const runPending = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Pro
     return 1;
   }
   const state = await store.getState();
-  const body = { pendingCount: state.pendingEventIds.length };
+  const body = { pendingCount: state.pendingEventIds.length, pendingSessionCount: pendingSessionCount(state) };
   writeResult(parsed, io, body, (style) => {
-    io.stdout.write(`\n  ${style.bold("Pending sessions")}  ${body.pendingCount}\n`);
-    if (body.pendingCount > 0) io.stdout.write(`  Run ${style.cyan("isaiokay rate")} to rate the latest one.\n`);
+    io.stdout.write(`\n  ${style.bold("Pending sessions")}  ${body.pendingSessionCount}\n`);
+    if (body.pendingSessionCount > 0) io.stdout.write(`  Run ${style.cyan("isaiokay rate")} to rate the latest one.\n`);
     io.stdout.write("\n");
   });
   return 0;
@@ -869,7 +951,7 @@ const offerDetectedIntegrations = async (parsed: ParsedArgs, store: LocalStore, 
   io.stdout.write(`\n  Run ${style.cyan("isaiokay doctor")} to check integration health.\n\n`);
 };
 
-const offerShellIntegration = async (parsed: ParsedArgs, io: CliIo): Promise<void> => {
+const offerShellIntegration = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<void> => {
   if (!loginUsesHumanOutput(parsed, io) || !io.select || parsed.flags.has("no-input") || parsed.flags.has("no-setup")) return;
   const env = io.env ?? process.env;
   const platform = io.platform ?? process.platform;
@@ -887,9 +969,12 @@ const offerShellIntegration = async (parsed: ParsedArgs, io: CliIo): Promise<voi
     return;
   }
   const result = await installShellIntegration(shell, io.home ?? homedir(), options);
-  io.stdout.write(`\n  ${style.green("✓")} ${style.bold("Automatic questionnaires enabled.")}\n`);
+  await store.registerShellIntegration(shell, result.path);
+  const reloadCommand = shellReloadCommand(shell, result.path);
+  io.stdout.write(`\n  ${style.green("✓")} ${style.bold("Automatic questionnaires installed.")}\n`);
   io.stdout.write(`  ${style.dim(result.path)}\n`);
-  io.stdout.write(`  ${style.dim("Open a new terminal, then keep using your normal harness commands.")}\n\n`);
+  if (reloadCommand) io.stdout.write(`  Run ${style.cyan(reloadCommand)} to activate it in this terminal.\n`);
+  io.stdout.write(`  ${style.dim("Then keep using your normal harness commands.")}\n\n`);
 };
 
 const canRunInteractiveSetup = (parsed: ParsedArgs, io: CliIo): boolean =>
@@ -905,7 +990,7 @@ const finishInteractiveSetup = async (parsed: ParsedArgs, store: LocalStore, io:
   const style = loginStyles(parsed, io);
   try {
     await offerDetectedIntegrations(parsed, store, io);
-    await offerShellIntegration(parsed, io);
+    await offerShellIntegration(parsed, store, io);
     await store.completeOnboarding(io.now?.() ?? Date.now());
     io.stdout.write(`  ${style.green("✓")} ${style.bold("Setup complete.")}\n`);
     io.stdout.write(`  ${style.dim("Keep using your normal coding CLI commands; eligible questionnaires open after a session.")}\n\n`);
@@ -1224,7 +1309,12 @@ const skipRatingToday = async (parsed: ParsedArgs, store: LocalStore, io: CliIo)
   return 0;
 };
 
-const runRateSubmit = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<number> => {
+const runRateSubmit = async (
+  parsed: ParsedArgs,
+  store: LocalStore,
+  io: CliIo,
+  options: { onFormComplete?: () => void } = {}
+): Promise<number> => {
   const credential = await requireCredential(parsed, store, io);
   if (!credential) return 1;
   const state = await store.getState();
@@ -1246,7 +1336,7 @@ const runRateSubmit = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): 
     io.stdout.write(`\n  ${style.bold(style.cyan("Rate this session"))}\n`);
     io.stdout.write(`  ${style.dim(`${selected.provider} · ${model ?? "Model confirmation needed"}`)}\n`);
     io.stdout.write(`  ${style.dim("Your prompts, code, transcripts, repositories, paths, and raw session ID are never sent.")}\n\n`);
-    if (io.form) io.stdout.write(`  ${style.dim("Two quick ratings. Use ↑/↓ for rows, ←/→ to change, and Enter to submit.")}\n\n`);
+    if (io.form) io.stdout.write(`  ${style.dim("Two quick ratings. Use ↑/↓ for rows, 1–5 to rate, and Enter to submit.")}\n\n`);
   }
 
   const suppliedRatings = {
@@ -1313,6 +1403,7 @@ const runRateSubmit = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): 
     let form: Record<string, string> | undefined;
     try {
       form = await completedForm(parsed, io, "Quick check-in", fields, "send");
+      options.onFormComplete?.();
     } catch (error) {
       if (error instanceof CliCancelledError) return skipRatingToday(parsed, store, io);
       throw error;
@@ -1417,9 +1508,10 @@ const runRate = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promis
     return 1;
   }
   const state = await store.getState();
-  const body = { nextAllowedAt: state.rate.nextAllowedAt };
+  const body = reminderStatus(state, io.now?.() ?? Date.now());
   writeResult(parsed, io, body, (style) => {
-    io.stdout.write(`\n  ${style.bold("Rating reminder")}  ${body.nextAllowedAt ? new Date(body.nextAllowedAt).toLocaleString() : "Available now"}\n\n`);
+    io.stdout.write(`\n  ${style.bold("Rating reminder")}  ${reminderStatusLabel(body)}\n`);
+    io.stdout.write(`  ${style.dim(`${experiencedMinutes(body)} experience minutes today`)}\n\n`);
   });
   return 0;
 };
@@ -1428,7 +1520,7 @@ const runPrompt = async (
   parsed: ParsedArgs,
   store: LocalStore,
   io: CliIo,
-  options: { silentWhenIneligible?: boolean } = {}
+  options: { silentWhenUnavailable?: boolean } = {}
 ): Promise<number> => {
   const operation = parsed.positionals[0] ?? "ask";
   if (operation === "never") {
@@ -1442,24 +1534,46 @@ const runPrompt = async (
   }
   const now = io.now?.() ?? Date.now();
   if (operation === "status") {
-    const decision = decidePrompt(await store.getState(), now);
-    writeResult(parsed, io, decision, (style) => io.stdout.write(`\n  ${style.bold("Rating reminder")}  ${decision.eligible ? "Ready" : decision.reason.replaceAll("_", " ")}\n\n`));
+    const status = reminderStatus(await store.getState(), now);
+    writeResult(parsed, io, status, (style) => {
+      io.stdout.write(`\n  ${style.bold("Rating reminder")}  ${reminderStatusLabel(status)}\n`);
+      io.stdout.write(`  ${style.dim(`${experiencedMinutes(status)} experience minutes today`)}\n\n`);
+    });
+    return 0;
+  }
+  if (!canUseRatingForm(parsed, io)) {
+    const status = reminderStatus(await store.getState(), now);
+    if (options.silentWhenUnavailable) return 0;
+    if (!status.eligible) {
+      writeResult(parsed, io, status, (style) => io.stdout.write(`\n  ${style.dim(`No reminder right now: ${reminderStatusLabel(status)}.`)}\n\n`));
+      return 0;
+    }
+    const body = { ...status, message: "Run `isaiokay rate` to share feedback." };
+    writeResult(parsed, io, body, (style) => io.stdout.write(`\n  A session is ready to rate. Run ${style.cyan("isaiokay rate")}.\n\n`));
     return 0;
   }
   const decision = await store.claimPrompt(now);
   if (!decision.eligible) {
-    if (options.silentWhenIneligible) return 0;
+    if (options.silentWhenUnavailable) return 0;
     writeResult(parsed, io, decision, (style) => io.stdout.write(`\n  ${style.dim(`No reminder right now: ${decision.reason.replaceAll("_", " ")}.`)}\n\n`));
-    return 0;
-  }
-  if (!canUseRatingForm(parsed, io)) {
-    const body = { ...decision, message: "Run `isaiokay rate` to share feedback." };
-    writeResult(parsed, io, body, (style) => io.stdout.write(`\n  A session is ready to rate. Run ${style.cyan("isaiokay rate")}.\n\n`));
     return 0;
   }
   const flags = new Map(parsed.flags);
   if (decision.eventId) flags.set("event-id", decision.eventId);
-  return runRateSubmit({ ...parsed, positionals: ["submit"], flags }, store, io);
+  let formCompleted = false;
+  try {
+    const result = await runRateSubmit(
+      { ...parsed, positionals: ["submit"], flags },
+      store,
+      io,
+      { onFormComplete: () => { formCompleted = true; } }
+    );
+    if (result !== 0 && !formCompleted) await store.releasePromptClaim(now).catch(() => undefined);
+    return result;
+  } catch (error) {
+    if (!formCompleted) await store.releasePromptClaim(now).catch(() => undefined);
+    throw error;
+  }
 };
 
 const runAdapterCommand = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<number> => {
@@ -1614,15 +1728,75 @@ const runDoctor = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Prom
     writeCommandError(parsed, io, "invalid_provider");
     return 1;
   }
-  const results = await Promise.all(providers.map((provider) => doctorAdapter(store, provider)));
-  writeResult(parsed, io, { results }, (style) => {
+  const home = io.home ?? homedir();
+  const env = io.env ?? process.env;
+  const platform = io.platform ?? process.platform;
+  const results = await Promise.all(providers.map((provider) => doctorAdapter(store, provider, home)));
+  const shellName = detectShell(env, platform);
+  const config = await store.getConfig();
+  const registeredShell = shellName ? config.shellIntegrations.findLast((entry) => entry.shell === shellName) : undefined;
+  const shellOptions = { env, platform, ...(shellName === "powershell" && registeredShell ? { profilePath: registeredShell.path } : {}) };
+  let shellInspectionFailed = false;
+  const shellStatus = shellName
+    ? await getShellIntegrationStatus(shellName, home, shellOptions).catch(() => {
+        shellInspectionFailed = true;
+        return { installed: false, current: false };
+      })
+    : null;
+  const shellPath = shellName ? shellIntegrationPath(shellName, home, shellOptions) : null;
+  const shellActive = shellStatus?.current === true && shellName !== null && shellIntegrationActive(env, shellName);
+  const shell = shellName && shellStatus && shellPath ? {
+    name: shellName,
+    path: shellPath,
+    ...shellStatus,
+    active: shellActive,
+    inspectionFailed: shellInspectionFailed,
+    refreshCommand: shellStatus.installed && !shellStatus.current ? `isaiokay shell install ${shellName}` : null,
+    reloadCommand: shellStatus.current && !shellActive ? shellReloadCommand(shellName, shellPath) : null
+  } : null;
+  writeResult(parsed, io, { results, shell }, (style) => {
     io.stdout.write(`\n  ${style.bold(style.cyan("Integration health"))}\n\n`);
     for (const result of results) {
       const healthy = result.registered && (result.mode !== "install" || result.ownedIntegrationFound);
-      const marker = healthy ? style.green("✓") : result.mode === "install" ? style.yellow("!") : style.dim("·");
-      io.stdout.write(`  ${marker} ${result.provider.padEnd(10)} ${result.message}\n`);
+      const broken = result.registered && result.mode === "install" && !result.ownedIntegrationFound;
+      const marker = healthy ? style.green("✓") : broken ? style.yellow("!") : style.dim("·");
+      const message = healthy
+        ? result.message
+        : broken
+          ? "Registered, but the managed integration is missing."
+          : result.mode === "install"
+            ? "Not installed."
+            : result.message;
+      io.stdout.write(`  ${marker} ${result.provider.padEnd(10)} ${message}\n`);
     }
-    io.stdout.write(`\n  ${style.dim("Run `isaiokay install <provider>` to repair an automatic integration.")}\n\n`);
+    const repairs = results.filter((result) => result.registered && result.mode === "install" && !result.ownedIntegrationFound);
+    if (repairs.length > 0) {
+      io.stdout.write(`\n  ${style.bold("Repairs")}\n`);
+      for (const result of repairs) io.stdout.write(`    ${style.cyan(`isaiokay install ${result.provider}`)}\n`);
+    } else {
+      io.stdout.write(`\n  ${style.dim("No provider repairs needed.")}\n`);
+    }
+    const requestedSetup = requested !== undefined
+      ? results.find((result) => result.mode === "install" && !result.registered)
+      : undefined;
+    if (requestedSetup) io.stdout.write(`  Setup  ${style.cyan(`isaiokay install ${requestedSetup.provider}`)}\n`);
+    if (shell) {
+      const state = shell.inspectionFailed
+        ? style.yellow("Check failed")
+        : shell.active
+          ? style.green("Active")
+          : !shell.installed
+            ? style.dim("Not installed")
+            : !shell.current
+              ? style.yellow("Refresh needed")
+              : style.yellow("Reload needed");
+      io.stdout.write(`\n  Automatic questionnaire  ${state}\n`);
+      if (shell.inspectionFailed) io.stdout.write(`    ${style.cyan("isaiokay shell status")}\n`);
+      else if (shell.refreshCommand) io.stdout.write(`    ${style.cyan(shell.refreshCommand)}\n`);
+      else if (shell.reloadCommand) io.stdout.write(`    ${style.cyan(shell.reloadCommand)}\n`);
+      else if (!shell.installed) io.stdout.write(`    ${style.cyan("isaiokay shell install")}\n`);
+    }
+    io.stdout.write("\n");
   });
   return 0;
 };

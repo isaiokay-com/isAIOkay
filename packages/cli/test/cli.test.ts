@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -209,7 +209,7 @@ test("a hook reminder from one harness cannot suppress another harness's exit qu
     createId: () => ids[idIndex++]!,
     runCommand: async (command, args, env) => {
       launched = { command, args, provider: env.ISAI_OKAY_FOREGROUND_PROVIDER };
-      return { exitCode: 0, signal: null };
+      return { exitCode: 0, wrapperShuttingDown: false };
     },
     form: async () => { formOpened = true; return undefined; }
   }, true);
@@ -286,7 +286,7 @@ test("run wraps any harness, forwards arguments unchanged, and asks only after e
     runCommand: async (command, args, env) => {
       launched = { command, args, provider: env.ISAI_OKAY_FOREGROUND_PROVIDER, session: env.ISAI_OKAY_FOREGROUND_SESSION };
       now += 21 * 60_000;
-      return { exitCode: 23, signal: null };
+      return { exitCode: 23, wrapperShuttingDown: false };
     },
     form: async () => { formOpened = true; return undefined; }
   }, true);
@@ -312,6 +312,72 @@ test("run wraps any harness, forwards arguments unchanged, and asks only after e
   assert.doesNotMatch(persisted, /private-command-argument|--resume|agent/);
 });
 
+test("run asks after every exit with a usable terminal but stays quiet during wrapper shutdown", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const now = 1_800_000_000_000;
+  const cases: ReadonlyArray<{
+    name: string;
+    result: { exitCode: number; wrapperShuttingDown: boolean };
+    shouldPrompt: boolean;
+  }> = [
+    { name: "clean-exit", result: { exitCode: 0, wrapperShuttingDown: false }, shouldPrompt: true },
+    { name: "nonzero-exit", result: { exitCode: 23, wrapperShuttingDown: false }, shouldPrompt: true },
+    { name: "posix-sigint", result: { exitCode: 130, wrapperShuttingDown: false }, shouldPrompt: true },
+    { name: "windows-ctrl-c", result: { exitCode: 0xc000013a, wrapperShuttingDown: false }, shouldPrompt: true },
+    { name: "windows-ctrl-break", result: { exitCode: 1, wrapperShuttingDown: false }, shouldPrompt: true },
+    { name: "child-sigterm", result: { exitCode: 143, wrapperShuttingDown: false }, shouldPrompt: true },
+    { name: "child-crash", result: { exitCode: 139, wrapperShuttingDown: false }, shouldPrompt: true },
+    { name: "wrapper-sigterm", result: { exitCode: 143, wrapperShuttingDown: true }, shouldPrompt: false },
+    { name: "wrapper-sighup", result: { exitCode: 129, wrapperShuttingDown: true }, shouldPrompt: false }
+  ];
+
+  for (const testCase of cases) {
+    const configDir = join(directory, testCase.name, "config");
+    const stateDir = join(directory, testCase.name, "state");
+    const store = new LocalStore({
+      configFile: join(configDir, "isaiokay", "config.json"),
+      credentialFile: join(configDir, "isaiokay", "credential.json"),
+      stateFile: join(stateDir, "isaiokay", "state.json")
+    });
+    await store.getConfig();
+    await store.saveCredential({
+      schemaVersion: 1,
+      serverUrl: "https://isaiokay.com",
+      accessToken: `iai_${"a".repeat(64)}`,
+      expiresAt: now + 86_400_000
+    });
+
+    const ids = [
+      wrapperId,
+      "00000000-0000-4000-8000-000000000121",
+      "00000000-0000-4000-8000-000000000122"
+    ];
+    let idIndex = 0;
+    let currentTime = now - 21 * 60_000;
+    let formOpened = false;
+    const output = capturedIo("", {
+      env: { TERM: "xterm-256color" },
+      now: () => currentTime,
+      fetch: async (input) => String(input).endsWith("/api/cli/items")
+        ? Response.json({ items: [{ id: "1", slug: "gpt-5-6-sol", name: "GPT-5.6 Sol", providerName: "OpenAI", type: "model" }] })
+        : Response.json({ error: { code: "unexpected", message: "Unexpected request" } }, { status: 500 }),
+      createId: () => ids[idIndex++]!,
+      runCommand: async () => {
+        currentTime = now;
+        return testCase.result;
+      },
+      form: async () => { formOpened = true; return undefined; }
+    }, true);
+
+    assert.equal(await runCli([
+      "run", "codex", "--config-dir", configDir, "--state-dir", stateDir
+    ], output.io), testCase.result.exitCode, testCase.name);
+    assert.equal(formOpened, testCase.shouldPrompt, testCase.name);
+    assert.equal((await store.getState()).rate.promptShownAt.length, testCase.shouldPrompt ? 1 : 0, testCase.name);
+  }
+});
+
 test("run accepts every supported harness through the same foreground contract", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
   context.after(() => rm(directory, { recursive: true, force: true }));
@@ -326,7 +392,7 @@ test("run accepts every supported harness through the same foreground contract",
         launched.push(env.ISAI_OKAY_FOREGROUND_PROVIDER ?? "missing");
         assert.equal(command, "test-harness");
         assert.deepEqual(args, ["--private-provider-argument"]);
-        return { exitCode: 0, signal: null };
+        return { exitCode: 0, wrapperShuttingDown: false };
       },
       select: async () => { throw new Error("short sessions must not open a prompt"); },
       form: async () => ({})
@@ -382,7 +448,7 @@ test("a redirected shell wrapper passes the harness through without collecting",
       assert.deepEqual(args, ["--version"]);
       assert.equal(env.USER_SETTING, "preserved");
       assert.equal(env.ISAI_OKAY_FOREGROUND_SESSION, undefined);
-      return { exitCode: 7, signal: null };
+      return { exitCode: 7, wrapperShuttingDown: false };
     }
   });
 
@@ -420,9 +486,17 @@ test("shell command installs and removes transparent normal-command wrappers", a
     shell: "zsh",
     path: join(home, ".zshrc"),
     installed: true,
-    changed: true
+    changed: true,
+    active: false,
+    reloadCommand: `. '${join(home, ".zshrc")}'`
   });
   assert.match(await readFile(join(home, ".zshrc"), "utf8"), /isaiokay run codex/);
+
+  const bashInstall = capturedIo("", { home, env });
+  assert.equal(await runCli(["shell", "install", "bash"], bashInstall.io), 0);
+  const bashStatus = capturedIo("", { home, env: { ...env, ISAI_OKAY_SHELL_ACTIVE: "zsh" } });
+  assert.equal(await runCli(["shell", "status", "bash"], bashStatus.io), 0);
+  assert.equal((JSON.parse(bashStatus.stdout()) as { active: boolean }).active, false);
 
   const uninstall = capturedIo("", { home, env });
   assert.equal(await runCli(["shell", "uninstall"], uninstall.io), 0);
@@ -471,6 +545,7 @@ test("shell command supports PowerShell on Windows and an exact redirected profi
   const home = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
   context.after(() => rm(home, { recursive: true, force: true }));
   const profile = join(home, "OneDrive - Example", "Documents", "PowerShell", "Profile.ps1");
+  const latestProfile = join(home, "PortableHost", "Profile.ps1");
   const env = { POWERSHELL_DISTRIBUTION_CHANNEL: "MSI:Windows 11 Pro" };
 
   const install = capturedIo("", { home, env, platform: "win32" });
@@ -479,17 +554,76 @@ test("shell command supports PowerShell on Windows and an exact redirected profi
     shell: "powershell",
     path: profile,
     installed: true,
-    changed: true
+    changed: true,
+    active: false,
+    reloadCommand: `. '${profile}'`
   });
   assert.match(await readFile(profile, "utf8"), /function global:codex/);
 
-  const status = capturedIo("", { home, env, platform: "win32" });
-  assert.equal(await runCli(["shell", "status", "pwsh", "--profile", profile], status.io), 0);
-  assert.equal((JSON.parse(status.stdout()) as { installed: boolean }).installed, true);
+  const secondInstall = capturedIo("", { home, env, platform: "win32" });
+  assert.equal(await runCli(["shell", "install", "powershell", "--profile", latestProfile], secondInstall.io), 0);
+  assert.match(await readFile(latestProfile, "utf8"), /function global:codex/);
+
+  const status = capturedIo("", { home, env: { ...env, ISAI_OKAY_SHELL_ACTIVE: "powershell" }, platform: "win32" });
+  assert.equal(await runCli(["shell", "status", "pwsh"], status.io), 0);
+  assert.deepEqual(JSON.parse(status.stdout()), {
+    shell: "powershell",
+    path: latestProfile,
+    installed: true,
+    current: true,
+    active: true,
+    refreshCommand: null,
+    reloadCommand: null
+  });
 
   const invalid = capturedIo("", { home, env, platform: "win32" }, true);
   assert.equal(await runCli(["shell", "install", "zsh", "--profile", profile], invalid.io), 1);
   assert.match(invalid.stderr(), /PowerShell profile path/);
+
+  const invalidPath = capturedIo("", { home, env, platform: "win32" }, true);
+  assert.equal(await runCli(["shell", "install", "powershell", "--profile="], invalidPath.io), 1);
+  assert.match(invalidPath.stderr(), /PowerShell profile path/);
+
+  const relativePath = capturedIo("", { home, env, platform: "win32" }, true);
+  assert.equal(await runCli(["shell", "install", "powershell", "--profile", "Profile.ps1"], relativePath.io), 1);
+  assert.match(relativePath.stderr(), /PowerShell profile path/);
+});
+
+test("status surfaces shell inspection failures instead of claiming the wrapper is absent", async (context) => {
+  const home = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  await writeFile(join(home, ".zshrc"), "# >>> isaiokay automatic questionnaire >>>\n", "utf8");
+  const env = { SHELL: "/bin/zsh", TERM: "xterm-256color", NO_COLOR: "1" };
+
+  const human = capturedIo("", { home, env }, true);
+  assert.equal(await runCli(["status"], human.io), 0);
+  assert.match(human.stdout(), /Shell wrapper Check failed/);
+  assert.match(human.stdout(), /isaiokay shell status/);
+  assert.doesNotMatch(human.stdout(), /isaiokay shell install/);
+
+  const json = capturedIo("", { home, env });
+  assert.equal(await runCli(["doctor", "codex"], json.io), 0);
+  assert.equal((JSON.parse(json.stdout()) as { shell: { inspectionFailed: boolean } }).shell.inspectionFailed, true);
+});
+
+test("doctor shows only actionable provider repairs and includes shell activation health", async (context) => {
+  const home = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const env = { SHELL: "/bin/zsh", TERM: "xterm-256color" };
+
+  assert.equal(await runCli(["install", "codex"], capturedIo("", { home, env }).io), 0);
+  const healthy = capturedIo("", { home, env }, true);
+  assert.equal(await runCli(["doctor", "codex"], healthy.io), 0);
+  assert.match(healthy.stdout(), /No provider repairs needed/);
+  assert.match(healthy.stdout(), /Automatic questionnaire/);
+  assert.match(healthy.stdout(), /isaiokay shell install/);
+  assert.doesNotMatch(healthy.stdout(), /install <provider>/);
+
+  await rm(join(home, ".codex", "hooks.json"));
+  const broken = capturedIo("", { home, env }, true);
+  assert.equal(await runCli(["doctor", "codex"], broken.io), 0);
+  assert.match(broken.stdout(), /Repairs/);
+  assert.match(broken.stdout(), /isaiokay install codex/);
 });
 
 test("config, pending, rate, and status commands remain local-only scaffolding", async (context) => {
@@ -537,6 +671,106 @@ test("config, pending, rate, and status commands remain local-only scaffolding",
   const promptStatus = capturedIo("");
   assert.equal(await runCli(["prompt", "status", ...base], promptStatus.io), 0);
   assert.match(promptStatus.stdout(), /"reason":"disabled"/);
+});
+
+test("status commands share reminder details and count sessions instead of lifecycle events", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const configDir = join(directory, "config");
+  const stateDir = join(directory, "state");
+  const base = ["--config-dir", configDir, "--state-dir", stateDir];
+  const store = new LocalStore({
+    configFile: join(configDir, "isaiokay", "config.json"),
+    credentialFile: join(configDir, "isaiokay", "credential.json"),
+    stateFile: join(stateDir, "isaiokay", "state.json")
+  });
+  const now = 1_800_000_000_000;
+  const sessionHash = "a".repeat(43);
+  await store.recordEvents([
+    { schemaVersion: 1, id: "00000000-0000-4000-8000-000000000201", provider: "codex", attribution: "active_model", model: "gpt-5.6-sol", sessionHash, occurredAt: now - 21 * 60_000, recordedAt: now },
+    { schemaVersion: 1, id: "00000000-0000-4000-8000-000000000202", provider: "codex", attribution: "active_model", model: "gpt-5.6-sol", sessionHash, occurredAt: now, recordedAt: now }
+  ]);
+
+  const statusOutput = capturedIo("", { now: () => now });
+  assert.equal(await runCli(["status", ...base], statusOutput.io), 0);
+  const status = JSON.parse(statusOutput.stdout()) as {
+    eventCount: number;
+    sessionCount: number;
+    pendingCount: number;
+    pendingSessionCount: number;
+    prompt: Record<string, unknown>;
+  };
+  assert.equal(status.eventCount, 2);
+  assert.equal(status.sessionCount, 1);
+  assert.equal(status.pendingCount, 2);
+  assert.equal(status.pendingSessionCount, 1);
+
+  const rateOutput = capturedIo("", { now: () => now });
+  const promptOutput = capturedIo("", { now: () => now });
+  assert.equal(await runCli(["rate", "show", ...base], rateOutput.io), 0);
+  assert.equal(await runCli(["prompt", "status", ...base], promptOutput.io), 0);
+  const rate = JSON.parse(rateOutput.stdout()) as Record<string, unknown>;
+  const prompt = JSON.parse(promptOutput.stdout()) as Record<string, unknown>;
+  for (const key of ["eligible", "reason", "eventId", "experiencedMs", "rateableExperiencedMs", "pendingSessionCountToday", "requiredExperienceMs", "remainingExperienceMs", "nextAllowedAt", "lastPromptAt"]) {
+    assert.deepEqual(rate[key], status.prompt[key], key);
+    assert.deepEqual(prompt[key], status.prompt[key], key);
+  }
+
+  await store.clearPending();
+  const noPending = capturedIo("", { now: () => now }, true);
+  assert.equal(await runCli(["prompt", "status", ...base], noPending.io), 0);
+  assert.match(noPending.stdout(), /No eligible session today/);
+  assert.doesNotMatch(noPending.stdout(), /Needs 1 more minute/);
+});
+
+test("prompt reservations survive only once an interactive form can actually open", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const configDir = join(directory, "config");
+  const stateDir = join(directory, "state");
+  const base = ["--config-dir", configDir, "--state-dir", stateDir];
+  const store = new LocalStore({
+    configFile: join(configDir, "isaiokay", "config.json"),
+    credentialFile: join(configDir, "isaiokay", "credential.json"),
+    stateFile: join(stateDir, "isaiokay", "state.json")
+  });
+  const now = 1_800_000_000_000;
+  const sessionHash = "a".repeat(43);
+  await store.recordEvents([
+    { schemaVersion: 1, id: "00000000-0000-4000-8000-000000000211", provider: "codex", attribution: "active_model", model: "gpt-5.6-sol", sessionHash, occurredAt: now - 21 * 60_000, recordedAt: now },
+    { schemaVersion: 1, id: "00000000-0000-4000-8000-000000000212", provider: "codex", attribution: "active_model", model: "gpt-5.6-sol", sessionHash, occurredAt: now, recordedAt: now }
+  ]);
+
+  const signedOut = capturedIo("", { now: () => now, form: async () => ({}) }, true);
+  assert.equal(await runCli(["prompt", ...base], signedOut.io), 1);
+  assert.deepEqual((await store.getState()).rate.promptShownAt, []);
+
+  await store.saveCredential({
+    schemaVersion: 1,
+    serverUrl: "https://isaiokay.com",
+    accessToken: `iai_${"a".repeat(64)}`,
+    expiresAt: now + 86_400_000
+  });
+  const catalogFailure = capturedIo("", {
+    now: () => now,
+    form: async () => { throw new Error("form must not open"); },
+    fetch: async () => Response.json({ error: { code: "catalog_unavailable", message: "Unavailable" } }, { status: 503 })
+  }, true);
+  assert.equal(await runCli(["prompt", ...base], catalogFailure.io), 1);
+  assert.deepEqual((await store.getState()).rate.promptShownAt, []);
+
+  const formFailure = capturedIo("", {
+    now: () => now,
+    form: async () => { throw new Error("terminal unavailable"); },
+    fetch: async () => Response.json({ items: [{ id: "1", slug: "gpt-5-6-sol", name: "GPT-5.6 Sol", providerName: "OpenAI", type: "model" }] })
+  }, true);
+  assert.equal(await runCli(["prompt", ...base], formFailure.io), 1);
+  assert.deepEqual((await store.getState()).rate.promptShownAt, []);
+
+  const redirected = capturedIo("", { now: () => now });
+  assert.equal(await runCli(["prompt", ...base], redirected.io), 0);
+  assert.equal((JSON.parse(redirected.stdout()) as { eligible: boolean }).eligible, true);
+  assert.deepEqual((await store.getState()).rate.promptShownAt, []);
 });
 
 test("login stores only the scoped credential and rate explicitly submits minimized feedback", async (context) => {
@@ -697,9 +931,11 @@ test("login detects popular CLIs and installs only explicitly selected integrati
   assert.match(await readFile(join(directory, ".codex", "hooks.json"), "utf8"), /isaiokay hook --provider codex/);
   assert.match(await readFile(join(directory, ".claude", "settings.json"), "utf8"), /isaiokay hook --provider claude/);
   assert.match(await readFile(join(directory, ".zshrc"), "utf8"), /isaiokay run codex/);
-  assert.match(login.stdout(), /Automatic questionnaires enabled/);
-  const config = JSON.parse(await readFile(join(directory, ".config", "isaiokay", "config.json"), "utf8")) as { adapters: Record<string, unknown> };
+  assert.match(login.stdout(), /Automatic questionnaires installed/);
+  assert.match(login.stdout(), /activate it in this terminal/);
+  const config = JSON.parse(await readFile(join(directory, ".config", "isaiokay", "config.json"), "utf8")) as { adapters: Record<string, unknown>; shellIntegrations: unknown[] };
   assert.deepEqual(Object.keys(config.adapters).sort(), ["claude", "codex"]);
+  assert.equal(config.shellIntegrations.length, 1);
 });
 
 test("a fresh bare command runs complete onboarding once", async (context) => {

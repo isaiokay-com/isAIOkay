@@ -171,7 +171,7 @@ export const createTerminalForm = (input: TtyInput, output: TtyOutput) => async 
         const value = truncate(choice?.label ?? "", maxValueWidth);
         output.write(`  ${pointer} ${index === active ? ansi(color, "\u001b[1m", "\u001b[22m", label) : label}  ${ansi(color, "\u001b[36m", "\u001b[39m", `‹ ${value} ›`)}\n`);
       }
-      output.write(`  ${ansi(color, "\u001b[2m", "\u001b[22m", `↑/↓ field · ←/→ change · Enter ${options.submitLabel ?? "continue"} · Esc ${options.cancelLabel ?? "cancel"}`)}\n`);
+      output.write(`  ${ansi(color, "\u001b[2m", "\u001b[22m", `↑/↓ field · ←/→ change · 1–5 rate · Enter ${options.submitLabel ?? "continue"} · Esc ${options.cancelLabel ?? "cancel"}`)}\n`);
       rendered = true;
     };
     const finish = (value: Record<string, string> | undefined): void => {
@@ -190,7 +190,12 @@ export const createTerminalForm = (input: TtyInput, output: TtyOutput) => async 
       }
       if (key.name === "up" || key.name === "k") active = (active - 1 + fields.length) % fields.length;
       else if (key.name === "down" || key.name === "j") active = (active + 1) % fields.length;
-      else if (key.name === "left" || key.name === "h" || key.name === "right" || key.name === "l") {
+      else if (/^[1-5]$/u.test(_text) || /^[1-5]$/u.test(key.name ?? "")) {
+        const directValue = /^[1-5]$/u.test(_text) ? _text : key.name ?? "";
+        const directIndex = fields[active]?.choices.findIndex((choice) => choice.value === directValue) ?? -1;
+        if (directIndex === -1) return;
+        indexes[active] = directIndex;
+      } else if (key.name === "left" || key.name === "h" || key.name === "right" || key.name === "l") {
         const choices = fields[active]?.choices ?? [];
         const direction = key.name === "left" || key.name === "h" ? -1 : 1;
         indexes[active] = ((indexes[active] ?? 0) + direction + choices.length) % choices.length;

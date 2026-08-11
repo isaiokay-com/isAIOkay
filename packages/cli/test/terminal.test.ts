@@ -59,3 +59,23 @@ test("terminal form supports arrow-key selection and restores terminal state", a
   assert.match(output, /←\/→ change/);
   assert.match(output, /\u001b\[\?25h/);
 });
+
+test("terminal form supports direct 1–5 rating hotkeys", async () => {
+  const input = new FakeInput();
+  let output = "";
+  const writer = { columns: 80, write: (chunk: string): boolean => { output += chunk; return true; } };
+  const form = createTerminalForm(input as unknown as NodeJS.ReadStream, writer as unknown as NodeJS.WriteStream);
+  const choices = ["5", "4", "3", "2", "1"].map((value) => ({ value, label: value }));
+  const resultPromise = form("Rate this session", [
+    { name: "quality", label: "Quality", initialValue: "3", choices },
+    { name: "speed", label: "Speed", initialValue: "3", choices }
+  ]);
+
+  input.emit("keypress", "5", { name: "5" });
+  input.emit("keypress", "", { name: "down" });
+  input.emit("keypress", "1", { name: "1" });
+  input.emit("keypress", "", { name: "return" });
+
+  assert.deepEqual(await resultPromise, { quality: "5", speed: "1" });
+  assert.match(output, /1–5 rate/);
+});

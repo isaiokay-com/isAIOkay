@@ -145,6 +145,22 @@ test("concurrent hooks atomically claim only one prompt slot", async (context) =
   assert.deepEqual((await store.getState()).rate.promptShownAt, [now]);
 });
 
+test("a failed foreground UI can release only its exact prompt reservation", async (context) => {
+  const { directory, store } = await temporaryStore();
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const now = 1_800_000_000_000;
+  const sessionHash = "a".repeat(43);
+  await store.recordEvent({ ...event(902), sessionHash, occurredAt: now - 21 * 60_000 });
+  await store.recordEvent({ ...event(903), sessionHash, occurredAt: now });
+
+  assert.equal((await store.claimPrompt(now)).eligible, true);
+  await store.releasePromptClaim(now - 1);
+  assert.deepEqual((await store.getState()).rate.promptShownAt, [now]);
+  await store.releasePromptClaim(now);
+  assert.deepEqual((await store.getState()).rate.promptShownAt, []);
+  assert.equal((await store.claimPrompt(now)).eligible, true);
+});
+
 test("corrupt local state is treated as empty without exposing its contents", async (context) => {
   const { directory, store } = await temporaryStore();
   context.after(() => rm(directory, { recursive: true, force: true }));

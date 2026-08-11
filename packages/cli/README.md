@@ -108,7 +108,11 @@ on Linux, `.bash_profile` on macOS, or the PowerShell current-user profile, or
 creates an isolated Fish startup file. New terminals transparently wrap detected
 harness executables, so users keep typing `codex`, `claude`, `agent`, `gemini`,
 and their other normal commands. `isaiokay shell uninstall` removes only this
-managed integration.
+managed integration. Installation prints the exact command to load the profile
+in the current terminal. `isaiokay shell status`, the main status screen, and
+`isaiokay doctor` distinguish installed configuration from an active wrapper;
+they also identify an older managed block that needs `isaiokay shell install`
+to refresh it.
 
 To remove IsAIokay.com completely, first run `isaiokay uninstall --all --purge`. It
 removes every integration entry owned by the CLI plus registered and standard
@@ -170,7 +174,10 @@ defer, and never-ask-again policy. Twenty minutes of accumulated activity during
 the current day makes the next safe turn boundary eligible. There is no random
 sampling and no hook reminder is shown more than once that day. A hook reminder
 does not consume the foreground questionnaire: if no rating or dismissal resolved
-the day, an eligible wrapped process can still open it on exit. `isaiokay rate` starts an interactive,
+the day, an eligible wrapped process can still open it on exit. Clean exits,
+nonzero exits, crashes, Ctrl-C on Linux/macOS, and Ctrl-C or Ctrl+Break on
+Windows remain eligible while the wrapper's terminal is usable. Shutdown
+signals received by the wrapper do not open a questionnaire. `isaiokay rate` starts an interactive,
 user-confirmed rating. The normal terminal flow has one selectable screen and
 requires no typing: result quality and usage efficiency are the only two rating questions, and the model
 row appears alongside them on the same screen. Exact observed models
@@ -178,7 +185,8 @@ start preselected, while provider-specific harnesses show only their provider's
 models. Comparison and task questions are not shown; recency comes from the
 recorded session time and long-term change is calculated from rating history.
 Arrow keys move between fields and change values; Esc skips the check-in until
-the next local day without submitting. Optional tags and comments remain available through
+the next local day without submitting. On either rating row, number keys `1`
+through `5` choose that score directly. Optional tags and comments remain available through
 `--tags` and `--comment`. For automation, `rate submit` accepts `--result-quality`,
 `--usage-efficiency`, `--item`, `--tags`, and `--comment` flags.
 Nothing is submitted without this foreground command. Hooks may show a reminder but never call the submission path.
@@ -196,6 +204,12 @@ are both present; otherwise it shows the compact status screen. In pipes and CI
 it never prompts and displays machine-readable help instead. The human status
 screen also detects supported, unconfigured CLIs on `PATH` and prints the exact
 `isaiokay install <provider>` commands needed to connect them.
+It reports true recorded and pending session counts while retaining the older
+event-count fields in JSON output. The reminder object is shared with
+`isaiokay prompt status` and `isaiokay rate show`, so eligibility and timing do
+not disagree across commands. Non-interactive status checks do not consume a
+prompt slot, and an interactive reservation is rolled back when authentication
+or catalog/form setup fails before the interaction can be completed.
 
 `login` uses a short-lived browser device code. The browser retains the Better
 Auth/X session; the CLI receives only a revocable credential scoped to allowance
@@ -234,7 +248,9 @@ overwritten. `uninstall` removes only handlers containing the IsAIokay.com marke
 Cline, Windsurf, Aider, and Muse Code remain documented manual/bridge modes where
 automatic mutation would rely on a UI-managed installation, an unpublished lifecycle API,
 or a per-turn/process wrapper. `doctor` only checks known candidate paths and
-never uploads their contents.
+never uploads their contents. Its human output suggests repairs only for a
+registered automatic integration that is actually missing, and includes the
+current shell wrapper activation or reload guidance.
 
 There is intentionally no Roo adapter.
 

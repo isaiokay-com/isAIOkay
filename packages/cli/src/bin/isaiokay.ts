@@ -43,26 +43,35 @@ const runCommand = async (
   command: string,
   args: string[],
   env: NodeJS.ProcessEnv
-): Promise<{ exitCode: number; signal: NodeJS.Signals | null }> => new Promise((resolve, reject) => {
+): Promise<{ exitCode: number; wrapperShuttingDown: boolean }> => new Promise((resolve, reject) => {
   // cross-spawn preserves direct argv semantics on Unix while safely resolving
   // Windows npm shims and .cmd/.bat launchers without shell:true.
   const child = crossSpawn(command, args, { env, stdio: "inherit", windowsHide: false });
-  const forwardedSignals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+  const handledSignals: NodeJS.Signals[] = process.platform === "win32"
+    ? ["SIGINT", "SIGBREAK", "SIGTERM", "SIGHUP"]
+    : ["SIGINT", "SIGQUIT", "SIGTERM", "SIGHUP"];
+  const terminalGroupSignals = new Set<NodeJS.Signals>(["SIGINT", "SIGQUIT", "SIGBREAK"]);
   const listeners = new Map<NodeJS.Signals, () => void>();
+  let wrapperShuttingDown = false;
   let settled = false;
   const cleanup = (): void => {
     for (const [signal, listener] of listeners) process.off(signal, listener);
   };
-  const finish = (error: Error | null, exitCode = 1, signal: NodeJS.Signals | null = null): void => {
+  const finish = (error: Error | null, exitCode = 1): void => {
     if (settled) return;
     settled = true;
     cleanup();
     if (error) reject(error);
-    else resolve({ exitCode, signal });
+    else resolve({ exitCode, wrapperShuttingDown });
   };
-  for (const signal of forwardedSignals) {
+  for (const signal of handledSignals) {
     const listener = (): void => {
-      if (child.exitCode === null && child.signalCode === null) {
+      if (signal === "SIGHUP" || signal === "SIGTERM") wrapperShuttingDown = true;
+      // Interactive control signals are delivered by the terminal directly to
+      // every process in its foreground group. Forwarding them again can turn
+      // one Ctrl-C into two interrupts. Shutdown signals may target only this
+      // wrapper, so those still need to be relayed to the child.
+      if (!terminalGroupSignals.has(signal) && child.exitCode === null && child.signalCode === null) {
         try {
           child.kill(signal);
         } catch {
@@ -77,7 +86,7 @@ const runCommand = async (
   child.once("error", (error) => { finish(error); });
   child.once("close", (code, signal) => {
     const signalCode = signal ? constants.signals[signal] ?? 1 : 0;
-    finish(null, code ?? 128 + signalCode, signal);
+    finish(null, code ?? 128 + signalCode);
   });
 });
 

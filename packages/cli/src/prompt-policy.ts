@@ -15,6 +15,16 @@ export interface PromptDecision {
   eventId: string | null;
 }
 
+export interface ReminderStatus extends PromptDecision {
+  experiencedMs: number;
+  rateableExperiencedMs: number;
+  pendingSessionCountToday: number;
+  requiredExperienceMs: number;
+  remainingExperienceMs: number;
+  nextAllowedAt: number | null;
+  lastPromptAt: number | null;
+}
+
 export type PromptSurface = "foreground" | "hook";
 
 const localDayKey = (timestamp: number): string => {
@@ -22,24 +32,40 @@ const localDayKey = (timestamp: number): string => {
   return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
 };
 
-const pendingSessionsToday = (state: LocalState, now: number): StoredEvent[][] => {
-  const pending = new Set(state.pendingEventIds);
-  const today = localDayKey(now);
+const groupedSessions = (events: readonly StoredEvent[]): StoredEvent[][] => {
   const sessions = new Map<string, StoredEvent[]>();
-  for (const event of state.events) {
-    if (!pending.has(event.id) || localDayKey(event.occurredAt) !== today) continue;
+  for (const event of events) {
     const key = `${event.provider}:${event.sessionHash ?? event.id}`;
-    sessions.set(key, [...(sessions.get(key) ?? []), event]);
+    const session = sessions.get(key);
+    if (session) session.push(event);
+    else sessions.set(key, [event]);
   }
-  return [...sessions.values()].map((events) => events.sort((left, right) => left.occurredAt - right.occurredAt)).sort((left, right) =>
-    Math.max(...right.map(({ occurredAt }) => occurredAt)) - Math.max(...left.map(({ occurredAt }) => occurredAt))
-  );
+  return [...sessions.values()]
+    .map((session) => session.sort((left, right) => left.occurredAt - right.occurredAt))
+    .sort((left, right) => right.at(-1)!.occurredAt - left.at(-1)!.occurredAt);
 };
+
+const pendingEvents = (state: LocalState): StoredEvent[] => {
+  const pending = new Set(state.pendingEventIds);
+  return state.events.filter((event) => pending.has(event.id));
+};
+
+const pendingSessionsToday = (state: LocalState, now: number): StoredEvent[][] => {
+  const today = localDayKey(now);
+  return groupedSessions(pendingEvents(state).filter((event) => localDayKey(event.occurredAt) === today));
+};
+
+export const recordedSessionCount = (state: LocalState): number => groupedSessions(state.events).length;
+
+export const pendingSessionCount = (state: LocalState): number => groupedSessions(pendingEvents(state)).length;
 
 const experiencedMilliseconds = (sessions: StoredEvent[][]): number => sessions.reduce((total, events) => {
   if (events.length < 2) return total;
   return total + Math.max(0, events.at(-1)!.occurredAt - events[0]!.occurredAt);
 }, 0);
+
+export const experiencedToday = (state: LocalState, now = Date.now()): number =>
+  experiencedMilliseconds(groupedSessions(state.events.filter((event) => localDayKey(event.occurredAt) === localDayKey(now))));
 
 /** Pure, outcome-independent cadence decision used by hooks and foreground prompts. */
 export const decidePrompt = (state: LocalState, now = Date.now(), surface: PromptSurface = "foreground"): PromptDecision => {
@@ -60,4 +86,21 @@ export const decidePrompt = (state: LocalState, now = Date.now(), surface: Promp
     return { eligible: false, reason: "no_meaningful_experience", eventId: null };
   }
   return { eligible: true, reason: "eligible", eventId: terminalEvent.id };
+};
+
+export const reminderStatus = (state: LocalState, now = Date.now()): ReminderStatus => {
+  const decision = decidePrompt(state, now);
+  const experiencedMs = experiencedToday(state, now);
+  const rateableSessions = pendingSessionsToday(state, now);
+  const rateableExperiencedMs = experiencedMilliseconds(rateableSessions);
+  return {
+    ...decision,
+    experiencedMs,
+    rateableExperiencedMs,
+    pendingSessionCountToday: rateableSessions.length,
+    requiredExperienceMs: MINIMUM_DAILY_EXPERIENCE_MS,
+    remainingExperienceMs: Math.max(0, MINIMUM_DAILY_EXPERIENCE_MS - rateableExperiencedMs),
+    nextAllowedAt: state.rate.nextAllowedAt,
+    lastPromptAt: state.rate.promptShownAt.at(-1) ?? null
+  };
 };

@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { normalizeModelIdentifier } from "./privacy.js";
 import { decidePrompt, type PromptDecision } from "./prompt-policy.js";
+import { isSafeShellPath } from "./shell-integration.js";
 import type { AdapterRegistration, CliCredential, LocalConfig, LocalState, Provider, StoragePaths, StoredEvent } from "./types.js";
 
 const MAX_EVENTS = 250;
@@ -122,7 +123,7 @@ const parseConfig = (value: unknown): LocalConfig | null => {
         if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
         const entry = value as Record<string, unknown>;
         const shell = entry.shell;
-        if ((shell !== "bash" && shell !== "zsh" && shell !== "fish" && shell !== "powershell") || typeof entry.path !== "string" || entry.path.length === 0) return [];
+        if ((shell !== "bash" && shell !== "zsh" && shell !== "fish" && shell !== "powershell") || typeof entry.path !== "string" || !isSafeShellPath(entry.path)) return [];
         return [{ shell: shell as LocalConfig["shellIntegrations"][number]["shell"], path: entry.path }];
       }).slice(-8)
     : [];
@@ -296,6 +297,7 @@ export class LocalStore {
   }
 
   async registerShellIntegration(shell: LocalConfig["shellIntegrations"][number]["shell"], path: string): Promise<LocalConfig> {
+    if (!isSafeShellPath(path)) throw new Error("invalid shell integration path");
     return this.mutateConfig((config) => ({
       ...config,
       shellIntegrations: [
@@ -377,6 +379,23 @@ export class LocalStore {
     });
     if (decision === null) throw new Error("prompt decision unavailable");
     return decision;
+  }
+
+  /** Release an exact prompt reservation when its UI could not be presented. */
+  async releasePromptClaim(claimedAt: number, surface: "foreground" | "hook" = "foreground"): Promise<LocalState> {
+    return this.mutateState((state) => {
+      const key = surface === "hook" ? "hookReminderShownAt" : "promptShownAt";
+      const shownAt = state.rate[key];
+      const index = shownAt.lastIndexOf(claimedAt);
+      if (index === -1) return state;
+      return {
+        ...state,
+        rate: {
+          ...state.rate,
+          [key]: [...shownAt.slice(0, index), ...shownAt.slice(index + 1)]
+        }
+      };
+    });
   }
 
   async disablePrompts(): Promise<LocalState> {

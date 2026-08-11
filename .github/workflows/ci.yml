@@ -57,6 +57,25 @@ jobs:
           fi
           echo "cli_changed=$cli_changed" >> "$GITHUB_OUTPUT"
 
+  cli_portability:
+    name: CLI portability (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run cli:check
+      - run: npm run cli:test
+      - run: npm run cli:pack
+
   deploy_cloudflare:
     name: Deploy Cloudflare
     needs: verify
@@ -102,7 +121,7 @@ jobs:
 
   publish_cli:
     name: Publish CLI
-    needs: verify
+    needs: [verify, cli_portability]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.verify.outputs.cli_changed == 'true' && vars.NPM_PUBLISH_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10

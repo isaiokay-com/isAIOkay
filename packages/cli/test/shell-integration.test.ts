@@ -3,7 +3,7 @@ import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import test from "node:test";
-import { detectShell, installShellIntegration, renderShellIntegration, shellIntegrationInstalled, shellIntegrationPath, uninstallShellIntegration } from "../src/shell-integration.js";
+import { detectShell, getShellIntegrationStatus, installShellIntegration, renderShellIntegration, shellIntegrationActive, shellIntegrationInstalled, shellIntegrationPath, shellReloadCommand, uninstallShellIntegration } from "../src/shell-integration.js";
 
 test("shell detection accepts only supported interactive shells", () => {
   assert.equal(detectShell({ SHELL: "/bin/zsh" }), "zsh");
@@ -53,6 +53,16 @@ test("Bash profiles follow Linux and macOS login-shell conventions", () => {
   assert.equal(shellIntegrationPath("bash", "/users/dev", { platform: "darwin" }), "/users/dev/.bash_profile");
 });
 
+test("shell activation and reload guidance are portable and safely quoted", () => {
+  assert.equal(shellIntegrationActive({ ISAI_OKAY_SHELL_ACTIVE: "zsh" }, "zsh"), true);
+  assert.equal(shellIntegrationActive({ ISAI_OKAY_SHELL_ACTIVE: "zsh" }, "bash"), false);
+  assert.equal(shellIntegrationActive({}, "zsh"), false);
+  assert.equal(shellReloadCommand("zsh", "/Users/Dev's Work/.zshrc"), `. '/Users/Dev'\\''s Work/.zshrc'`);
+  assert.equal(shellReloadCommand("fish", "/Users/Dev's Work/config.fish"), `source '/Users/Dev\\'s Work/config.fish'`);
+  assert.equal(shellReloadCommand("powershell", "C:\\Users\\Dev's Work\\Profile.ps1"), `. 'C:\\Users\\Dev''s Work\\Profile.ps1'`);
+  assert.equal(shellReloadCommand("bash", "bad\npath"), null);
+});
+
 test("managed zsh integration preserves user configuration and is idempotent", async (context) => {
   const home = await mkdtemp(join(tmpdir(), "isaiokay-shell-"));
   context.after(() => rm(home, { recursive: true, force: true }));
@@ -71,6 +81,7 @@ test("managed zsh integration preserves user configuration and is idempotent", a
   assert.match(installed, /\[ -t 0 \].*\[ -t 1 \]/);
   assert.match(installed, /! \$\+functions\[codex\].*! \$\+aliases\[codex\]/);
   assert.equal(await shellIntegrationInstalled("zsh", home), true);
+  assert.deepEqual(await getShellIntegrationStatus("zsh", home), { installed: true, current: true });
 
   assert.deepEqual(await installShellIntegration("zsh", home), { path, changed: false });
   assert.equal(await readFile(path, "utf8"), installed);
@@ -84,6 +95,23 @@ test("shell installation refuses malformed or duplicate managed blocks", async (
   context.after(() => rm(home, { recursive: true, force: true }));
   await writeFile(join(home, ".bashrc"), "# >>> isaiokay automatic questionnaire >>>\n", "utf8");
   await assert.rejects(installShellIntegration("bash", home), /malformed/i);
+});
+
+test("shell status requires the complete generated wrapper to call it current", async (context) => {
+  const home = await mkdtemp(join(tmpdir(), "isaiokay-shell-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const path = join(home, ".zshrc");
+  const incomplete = [
+    "# >>> isaiokay automatic questionnaire >>>",
+    "export ISAI_OKAY_SHELL_ACTIVE=zsh",
+    "# <<< isaiokay automatic questionnaire <<<",
+    ""
+  ].join("\n");
+  await writeFile(path, incomplete, "utf8");
+
+  assert.deepEqual(await getShellIntegrationStatus("zsh", home), { installed: true, current: false });
+  assert.deepEqual(await installShellIntegration("zsh", home), { path, changed: true });
+  assert.deepEqual(await getShellIntegrationStatus("zsh", home), { installed: true, current: true });
 });
 
 test("shell installation preserves symlinked dotfiles and edits their target", async (context) => {
@@ -126,6 +154,21 @@ test("fish uses an isolated app-owned startup file", async (context) => {
   await writeFile(path, renderShellIntegration("fish"), "utf8");
   assert.deepEqual(await uninstallShellIntegration("fish", home), { path, changed: true });
   await assert.rejects(readFile(path, "utf8"));
+});
+
+test("fish safely refreshes and removes an older app-owned integration", async (context) => {
+  const home = await mkdtemp(join(tmpdir(), "isaiokay-shell-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const path = join(home, ".config", "fish", "conf.d", "isaiokay.fish");
+  const previous = renderShellIntegration("fish").replace("set -gx ISAI_OKAY_SHELL_ACTIVE fish\n", "");
+  await mkdir(join(home, ".config", "fish", "conf.d"), { recursive: true });
+  await writeFile(path, previous, "utf8");
+
+  assert.deepEqual(await getShellIntegrationStatus("fish", home), { installed: true, current: false });
+  assert.deepEqual(await installShellIntegration("fish", home), { path, changed: true });
+  assert.deepEqual(await getShellIntegrationStatus("fish", home), { installed: true, current: true });
+  await writeFile(path, previous, "utf8");
+  assert.deepEqual(await uninstallShellIntegration("fish", home), { path, changed: true });
 });
 
 test("managed PowerShell integration preserves the profile and wraps Windows command shims", async (context) => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decidePrompt } from "../src/prompt-policy.js";
+import { decidePrompt, pendingSessionCount, recordedSessionCount, reminderStatus } from "../src/prompt-policy.js";
 import type { LocalState, StoredEvent } from "../src/types.js";
 
 const now = 1_800_000_000_000;
@@ -76,4 +76,42 @@ test("yesterday's pending activity does not trigger today's reminder", () => {
   const state = stateFor("a".repeat(43));
   state.events = state.events.map((entry) => ({ ...entry, occurredAt: entry.occurredAt - 24 * 60 * 60_000 }));
   assert.equal(decidePrompt(state, now).reason, "no_meaningful_experience");
+});
+
+test("status reports session counts and shared cadence details rather than event counts", () => {
+  const state = stateFor("a".repeat(43));
+  const secondStart = event("00000000-0000-4000-8000-000000000003", "b".repeat(43), now - 10 * 60_000);
+  const secondEnd = event("00000000-0000-4000-8000-000000000004", "b".repeat(43), now);
+  state.events.push(secondStart, secondEnd);
+  state.pendingEventIds.push(secondStart.id, secondEnd.id);
+
+  assert.equal(recordedSessionCount(state), 2);
+  assert.equal(pendingSessionCount(state), 2);
+  assert.deepEqual(reminderStatus(state, now), {
+    eligible: true,
+    reason: "eligible",
+    eventId: state.events[1]!.id,
+    experiencedMs: 31 * 60_000,
+    rateableExperiencedMs: 31 * 60_000,
+    pendingSessionCountToday: 2,
+    requiredExperienceMs: 20 * 60_000,
+    remainingExperienceMs: 0,
+    nextAllowedAt: null,
+    lastPromptAt: null
+  });
+
+  state.pendingEventIds = [];
+  assert.equal(pendingSessionCount(state), 0);
+  assert.deepEqual(reminderStatus(state, now), {
+    eligible: false,
+    reason: "no_meaningful_experience",
+    eventId: null,
+    experiencedMs: 31 * 60_000,
+    rateableExperiencedMs: 0,
+    pendingSessionCountToday: 0,
+    requiredExperienceMs: 20 * 60_000,
+    remainingExperienceMs: 20 * 60_000,
+    nextAllowedAt: null,
+    lastPromptAt: null
+  });
 });
