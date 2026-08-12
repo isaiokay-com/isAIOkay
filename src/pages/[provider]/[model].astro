@@ -13,6 +13,9 @@ export const prerender = false;
 
 const providerParam = Astro.params.provider ?? "";
 const modelParam = Astro.params.model ?? "";
+if (providerParam === "qwen" && modelParam === "qwen3.8-max-preview") {
+  return Astro.redirect("/qwen/qwen3.8-max", 301);
+}
 const env = getRuntimeEnv(Astro.locals);
 const { payload } = await loadPublicRanking(env, "live");
 const matchedModel = payload.items.find((candidate) => matchesModelPageRoute(candidate, providerParam, modelParam)) ?? null;

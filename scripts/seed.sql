@@ -60,8 +60,16 @@ insert into tracked_item (
   release_source_url, is_active, sort_order, created_at, updated_at
 ) values
 ('a0f6f4a8-5e76-4c62-a224-1db4de8b1021', 'DeepSeek V4 Flash', 'deepseek-v4-flash', 'DeepSeek', 'model', 'DeepSeek model optimized for agentic coding and tool use', '/providers/deepseek.svg', 'https://api-docs.deepseek.com/quick_start/pricing/', 'API pricing should be verified before decisions.', unixepoch('now') * 1000, 'deepseek-v4-flash-0731', unixepoch('2026-07-31') * 1000, 'https://api-docs.deepseek.com/updates/', 1, 40, unixepoch('now') * 1000, unixepoch('now') * 1000),
-('a0f6f4a8-5e76-4c62-a224-1db4de8b1022', 'Qwen 3.8 Max Preview', 'qwen-3-8-max-preview', 'Qwen', 'model', 'Qwen preview model available in current Qwen Code workflows', '/providers/qwen.svg', 'https://qwenlm.github.io/qwen-code-docs/en/blog/updates/weekly-update-2026-07-23/', 'Preview availability and pricing should be verified before decisions.', unixepoch('now') * 1000, 'qwen3.8-max-preview', unixepoch('2026-07-23') * 1000, 'https://qwenlm.github.io/qwen-code-docs/en/blog/updates/weekly-update-2026-07-23/', 1, 41, unixepoch('now') * 1000, unixepoch('now') * 1000),
-('a0f6f4a8-5e76-4c62-a224-1db4de8b1023', 'Qwen Code', 'qwen-code', 'Qwen', 'agent', 'Open-source terminal coding agent from the Qwen team', '/providers/qwen.svg', 'https://qwenlm.github.io/qwen-code-docs/en/', 'Free and provider-backed usage options vary.', unixepoch('now') * 1000, null, null, 'https://qwenlm.github.io/qwen-code-docs/en/', 1, 120, unixepoch('now') * 1000, unixepoch('now') * 1000)
+('a0f6f4a8-5e76-4c62-a224-1db4de8b1022', 'Qwen 3.8 Max', 'qwen-3-8-max', 'Qwen', 'model', 'Qwen flagship model for long-horizon coding and professional work', '/providers/qwen.svg', 'https://www.qwencloud.com/models/qwen3.8-max', 'API pricing should be verified before decisions.', unixepoch('now') * 1000, 'qwen3.8-max', unixepoch('2026-08-03') * 1000, 'https://qwen.ai/blog?id=qwen3.8', 1, 41, unixepoch('now') * 1000, unixepoch('now') * 1000),
+('a0f6f4a8-5e76-4c62-a224-1db4de8b1023', 'Qwen Code', 'qwen-code', 'Qwen', 'agent', 'Open-source terminal coding agent from the Qwen team', '/providers/qwen.svg', 'https://qwenlm.github.io/qwen-code-docs/en/', 'Free and provider-backed usage options vary.', unixepoch('now') * 1000, null, null, 'https://qwenlm.github.io/qwen-code-docs/en/', 1, 120, unixepoch('now') * 1000, unixepoch('now') * 1000),
+('a0f6f4a8-5e76-4c62-a224-1db4de8b1024', 'Grok 4.6', 'grok-4-6', 'xAI', 'model', 'Grok model focused on long-running agents and ambitious interactive work', '/providers/xai.svg', 'https://x.ai/news/grok-4-6', 'API pricing should be verified before decisions.', unixepoch('now') * 1000, 'grok-4.6', unixepoch('2026-08-12') * 1000, 'https://x.ai/news/grok-4-6', 1, 42, unixepoch('now') * 1000, unixepoch('now') * 1000),
+('a0f6f4a8-5e76-4c62-a224-1db4de8b1025', 'DeepSeek V4 Pro', 'deepseek-v4-pro', 'DeepSeek', 'model', 'DeepSeek flagship model for coding, reasoning, and long-context agents', '/providers/deepseek.svg', 'https://api-docs.deepseek.com/quick_start/pricing/', 'API pricing should be verified before decisions.', unixepoch('now') * 1000, 'deepseek-v4-pro', unixepoch('2026-04-24') * 1000, 'https://api-docs.deepseek.com/news/news260424/', 1, 43, unixepoch('now') * 1000, unixepoch('now') * 1000),
+('a0f6f4a8-5e76-4c62-a224-1db4de8b1026', 'Composer 2.5', 'composer-2-5', 'Cursor', 'model', 'Cursor coding model for complex instructions and long-running agent tasks', '/providers/cursor.svg', 'https://cursor.com/composer', 'Cursor plan and usage pricing should be verified before decisions.', unixepoch('now') * 1000, 'composer-2.5', unixepoch('2026-05-18') * 1000, 'https://cursor.com/changelog/composer-2-5', 1, 44, unixepoch('now') * 1000, unixepoch('now') * 1000),
+('a0f6f4a8-5e76-4c62-a224-1db4de8b1027', 'Kimi K3', 'kimi-k3', 'Kimi', 'model', 'Kimi flagship coding model with native vision and long-context support', '/providers/kimi.svg', 'https://www.kimi.com/resources/kimi-code-introduction', 'Kimi plan and API pricing should be verified before decisions.', unixepoch('now') * 1000, 'kimi-k3', unixepoch('2026-07-16') * 1000, 'https://www.kimi.com/code/docs/en/kimi-code/whats-new.html', 1, 45, unixepoch('now') * 1000, unixepoch('now') * 1000),
+('a0f6f4a8-5e76-4c62-a224-1db4de8b1028', 'Kimi K2.7 Code', 'kimi-k2-7-code', 'Kimi', 'model', 'Kimi model optimized for long-horizon coding and agent workflows', '/providers/kimi.svg', 'https://www.kimi.com/resources/kimi-k2-7-code', 'Kimi plan and API pricing should be verified before decisions.', unixepoch('now') * 1000, 'kimi-k2.7-code', unixepoch('2026-06-12') * 1000, 'https://www.kimi.com/code/docs/en/kimi-code/whats-new.html', 1, 46, unixepoch('now') * 1000, unixepoch('now') * 1000),
+('a0f6f4a8-5e76-4c62-a224-1db4de8b1029', 'GLM-5.2', 'glm-5-2', 'Z.ai', 'model', 'Z.ai flagship model for long-horizon coding with a one-million-token context', '/providers/zai.svg', 'https://docs.z.ai/guides/llm/glm-5.2', 'API pricing should be verified before decisions.', unixepoch('now') * 1000, 'glm-5.2', unixepoch('2026-06-16') * 1000, 'https://z.ai/blog/glm-5.2', 1, 47, unixepoch('now') * 1000, unixepoch('now') * 1000),
+('a0f6f4a8-5e76-4c62-a224-1db4de8b1030', 'MiniMax M3', 'minimax-m3', 'MiniMax', 'model', 'MiniMax coding model with long context and native multimodal support', '/providers/minimax.svg', 'https://www.minimax.io/models/text/m3', 'API pricing should be verified before decisions.', unixepoch('now') * 1000, 'minimax-m3', unixepoch('2026-06-01') * 1000, 'https://www.minimax.io/blog/minimax-m3', 1, 48, unixepoch('now') * 1000, unixepoch('now') * 1000),
+('a0f6f4a8-5e76-4c62-a224-1db4de8b1031', 'Grok Build', 'grok-build', 'xAI', 'agent', 'Open-source terminal coding agent powered by Grok', '/providers/xai.svg', 'https://x.ai/build', 'Availability and usage pricing vary by plan.', unixepoch('now') * 1000, null, unixepoch('2026-05-25') * 1000, 'https://x.ai/news/grok-build-cli', 1, 130, unixepoch('now') * 1000, unixepoch('now') * 1000)
 on conflict(id) do update set
   name = excluded.name, slug = excluded.slug, provider_name = excluded.provider_name,
   type = excluded.type, description = excluded.description, logo_url = excluded.logo_url,
@@ -89,7 +97,25 @@ insert into model_alias (id, tool, raw_label, normalized_label, tracked_item_id,
 ('b0f6f4a8-5e76-4c62-a224-1db4de8b0015', 'opencode', 'deepseek/deepseek-v4-flash', 'deepseek-deepseek-v4-flash', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1021', unixepoch('now') * 1000, unixepoch('now') * 1000),
 ('b0f6f4a8-5e76-4c62-a224-1db4de8b0016', 'opencode', 'qwen/qwen3.8-max-preview', 'qwen-qwen3-8-max-preview', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1022', unixepoch('now') * 1000, unixepoch('now') * 1000),
 ('b0f6f4a8-5e76-4c62-a224-1db4de8b0017', 'qwen-code', 'qwen3.8-max-preview', 'qwen3-8-max-preview', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1022', unixepoch('now') * 1000, unixepoch('now') * 1000),
-('b0f6f4a8-5e76-4c62-a224-1db4de8b0018', 'qwen-code', 'deepseek-v4-flash', 'deepseek-v4-flash', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1021', unixepoch('now') * 1000, unixepoch('now') * 1000)
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0018', 'qwen-code', 'deepseek-v4-flash', 'deepseek-v4-flash', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1021', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0019', 'opencode', 'opencode-go/grok-4.6', 'opencode-go-grok-4-6', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1024', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0020', 'opencode', 'xai/grok-4.6', 'xai-grok-4-6', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1024', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0021', 'grok-build', 'grok-4.6', 'grok-4-6', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1024', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0022', 'grok-build', 'grok-build', 'grok-build', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1024', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0023', 'opencode', 'opencode-go/deepseek-v4-pro', 'opencode-go-deepseek-v4-pro', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1025', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0024', 'opencode', 'deepseek/deepseek-v4-pro', 'deepseek-deepseek-v4-pro', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1025', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0025', 'cursor', 'composer-2.5', 'composer-2-5', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1026', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0026', 'opencode', 'opencode-go/kimi-k3', 'opencode-go-kimi-k3', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1027', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0027', 'opencode', 'kimi/kimi-k3', 'kimi-kimi-k3', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1027', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0028', 'opencode', 'opencode-go/kimi-k2.7-code', 'opencode-go-kimi-k2-7-code', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1028', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0029', 'opencode', 'kimi/kimi-k2.7-code', 'kimi-kimi-k2-7-code', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1028', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0030', 'opencode', 'opencode-go/glm-5.2', 'opencode-go-glm-5-2', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1029', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0031', 'opencode', 'zai/glm-5.2', 'zai-glm-5-2', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1029', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0032', 'opencode', 'opencode-go/minimax-m3', 'opencode-go-minimax-m3', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1030', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0033', 'opencode', 'minimax/minimax-m3', 'minimax-minimax-m3', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1030', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0034', 'opencode', 'opencode-go/qwen3.8-max', 'opencode-go-qwen3-8-max', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1022', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0035', 'opencode', 'qwen/qwen3.8-max', 'qwen-qwen3-8-max', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1022', unixepoch('now') * 1000, unixepoch('now') * 1000),
+('b0f6f4a8-5e76-4c62-a224-1db4de8b0036', 'qwen-code', 'qwen3.8-max', 'qwen3-8-max', 'a0f6f4a8-5e76-4c62-a224-1db4de8b1022', unixepoch('now') * 1000, unixepoch('now') * 1000)
 on conflict(tool, normalized_label) do update set
   raw_label = excluded.raw_label, tracked_item_id = excluded.tracked_item_id, updated_at = excluded.updated_at;
 
@@ -103,6 +129,11 @@ update tracked_item set
     when provider_name = 'Google' then '/providers/google-gemini.svg'
     when provider_name = 'DeepSeek' then '/providers/deepseek.svg'
     when provider_name = 'Qwen' then '/providers/qwen.svg'
+    when provider_name = 'Cursor' then '/providers/cursor.svg'
+    when provider_name = 'xAI' then '/providers/xai.svg'
+    when provider_name = 'Kimi' then '/providers/kimi.svg'
+    when provider_name = 'Z.ai' then '/providers/zai.svg'
+    when provider_name = 'MiniMax' then '/providers/minimax.svg'
     else null
   end,
   updated_at = unixepoch('now') * 1000;

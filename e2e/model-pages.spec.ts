@@ -1,5 +1,16 @@
 import { expect, test } from "@playwright/test";
 
+const newModelPages = [
+  ["/xai/grok-4.6", "Grok 4.6"],
+  ["/deepseek/deepseek-v4-pro", "DeepSeek V4 Pro"],
+  ["/cursor/composer-2.5", "Composer 2.5"],
+  ["/kimi/kimi-k3", "Kimi K3"],
+  ["/kimi/kimi-k2.7-code", "Kimi K2.7 Code"],
+  ["/z-ai/glm-5.2", "GLM-5.2"],
+  ["/minimax/minimax-m3", "MiniMax M3"],
+  ["/qwen/qwen3.8-max", "Qwen 3.8 Max"]
+] as const;
+
 test("serves canonical provider/model history pages", async ({ page, request }) => {
   await page.goto("/");
   const homeRow = page.locator("#item-gpt-5-6-sol");
@@ -27,7 +38,23 @@ test("serves canonical provider/model history pages", async ({ page, request }) 
   expect(legacy.headers().location).toBe("/openai/gpt-5.6-sol");
 
   const sitemap = await request.get("/sitemap.xml");
-  expect(await sitemap.text()).toContain("https://isaiokay.com/openai/gpt-5.6-sol");
+  const sitemapXml = await sitemap.text();
+  expect(sitemapXml).toContain("https://isaiokay.com/openai/gpt-5.6-sol");
+  for (const [path] of newModelPages) expect(sitemapXml).toContain(`https://isaiokay.com${path}`);
+});
+
+test("serves every newly tracked model pSEO page", async ({ request }) => {
+  for (const [path, modelName] of newModelPages) {
+    const response = await request.get(path);
+    expect(response.status(), path).toBe(200);
+    const html = await response.text();
+    expect(html, path).toContain(`<h1 id="model-title">${modelName}</h1>`);
+    expect(html, path).toContain(`<link rel="canonical" href="https://isaiokay.com${path}">`);
+  }
+
+  const qwenPreview = await request.get("/qwen/qwen3.8-max-preview", { maxRedirects: 0 });
+  expect(qwenPreview.status()).toBe(301);
+  expect(qwenPreview.headers().location).toBe("/qwen/qwen3.8-max");
 });
 
 test("model page has no horizontal document overflow at supported widths", async ({ page }) => {
