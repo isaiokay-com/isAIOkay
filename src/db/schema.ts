@@ -191,6 +191,7 @@ export const feedbackReport = sqliteTable(
     feedbackContextId: text("feedback_context_id"),
     clientEventId: text("client_event_id"),
     submittedAt: integer("submitted_at").notNull(),
+    editedAt: integer("edited_at"),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull()
   },

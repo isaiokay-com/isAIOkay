@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import type { Env } from "../../src/env";
 import { archiveExpiredRiskData, ensureProfile, getFeedbackAllowance, getPublicProfileRatingsPage, getPublicProfileView, getRankingFromD1, latestAggregateBefore, updateProfilePreferences } from "../../src/db/repositories";
 import { loadPublicRanking } from "../../src/lib/cache";
+import { FEEDBACK_EDIT_WINDOW_MS } from "../../src/lib/feedback";
 import { createAuth, DEVELOPMENT_USER_COOKIE, requireAdministrator } from "../../src/services/auth";
 import { approveDeviceAuthorization, exchangeDeviceAuthorization, requireCliIdentity, startDeviceAuthorization } from "../../src/services/cli-auth";
 import { resolveCliAgentItemId, resolveCliTrackedItem } from "../../src/services/cli-feedback";
@@ -39,7 +40,28 @@ const command = (
 const submit = async (input: ReturnType<typeof command>) => {
   const stub = runtime.FEEDBACK_ALLOWANCE.get(runtime.FEEDBACK_ALLOWANCE.idFromName(input.userId));
   const response = await stub.fetch("https://allowance/submit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input) });
-  return { status: response.status, body: await response.json() as { accepted: boolean; idempotent: boolean; code?: string; allowance: { remaining: number; alreadyRatedItemIds: string[] } } };
+  return { status: response.status, body: await response.json() as { accepted: boolean; idempotent: boolean; code?: string; reportId?: string; allowance: { remaining: number; alreadyRatedItemIds: string[] } } };
+};
+
+const edit = async (userId: string, reportId: string, now: number, resultQualityRating = 2) => {
+  const stub = runtime.FEEDBACK_ALLOWANCE.get(runtime.FEEDBACK_ALLOWANCE.idFromName(userId));
+  const response = await stub.fetch("https://allowance/edit", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      userId,
+      now,
+      report: {
+        reportId,
+        agentItemId: null,
+        resultQualityRating,
+        usageEfficiencyRating: 3,
+        tags: ["corrected"],
+        shortComment: "Updated once"
+      }
+    })
+  });
+  return { status: response.status, body: await response.json() as { edited: boolean; code?: string; reportId?: string } };
 };
 
 beforeAll(async () => {
@@ -75,6 +97,76 @@ describe("FeedbackAllowance Durable Object", () => {
     const results = await Promise.all([submit(command(userId, itemA)), submit(command(userId, itemB)), submit(command(userId, itemC))]);
     expect(results.filter((result) => result.status === 201)).toHaveLength(2);
     expect(results.filter((result) => result.status === 429)).toHaveLength(1);
+  });
+
+  it("allows the latest web report to be edited once within ten minutes", async () => {
+    const userId = crypto.randomUUID();
+    const editableItemId = crypto.randomUUID();
+    await insertItem(runtime, editableItemId, `editable-${editableItemId}`);
+    const submittedAt = Date.now();
+    const input = command(userId, editableItemId);
+    input.now = submittedAt;
+    const created = await submit(input);
+    expect(created.status).toBe(201);
+    await recalculatePeriod(runtime, "live", submittedAt + 30_000);
+    const scoreBefore = await runtime.DB.prepare(
+      "select overall_score from aggregate where tracked_item_id = ? and period = 'live' order by calculated_at desc limit 1"
+    ).bind(editableItemId).first<{ overall_score: number }>();
+
+    const firstEdit = await edit(userId, created.body.reportId!, submittedAt + 60_000);
+    expect(firstEdit).toMatchObject({ status: 200, body: { edited: true, reportId: created.body.reportId } });
+    const report = await runtime.DB.prepare(
+      "select result_quality_rating, usage_efficiency_rating, tags_json, short_comment, edited_at from feedback_report where id = ?"
+    ).bind(created.body.reportId).first<Record<string, unknown>>();
+    expect(report).toMatchObject({
+      result_quality_rating: 2,
+      usage_efficiency_rating: 3,
+      tags_json: '["corrected"]',
+      short_comment: "Updated once",
+      edited_at: submittedAt + 60_000
+    });
+    await recalculatePeriod(runtime, "live", submittedAt + 90_000);
+    const scoreAfter = await runtime.DB.prepare(
+      "select overall_score from aggregate where tracked_item_id = ? and period = 'live' order by calculated_at desc limit 1"
+    ).bind(editableItemId).first<{ overall_score: number }>();
+    expect(scoreAfter!.overall_score).toBeLessThan(scoreBefore!.overall_score);
+    expect((await edit(userId, created.body.reportId!, submittedAt + 120_000)).body.code).toBe("edit_already_used");
+    const audit = await runtime.DB.prepare(
+      "select action, actor_user_id from audit_log where entity_id = ? order by created_at desc limit 1"
+    ).bind(created.body.reportId).first<{ action: string; actor_user_id: string }>();
+    expect(audit).toEqual({ action: "edit_own_report", actor_user_id: userId });
+  });
+
+  it("rejects an expired edit and a report that is no longer latest", async () => {
+    const expiredUserId = crypto.randomUUID();
+    const submittedAt = Date.now();
+    const expiredInput = command(expiredUserId, itemA);
+    expiredInput.now = submittedAt;
+    const expiredReport = await submit(expiredInput);
+    expect((await edit(expiredUserId, expiredReport.body.reportId!, submittedAt + FEEDBACK_EDIT_WINDOW_MS)).body.code).toBe("edit_expired");
+
+    const latestUserId = crypto.randomUUID();
+    const firstInput = command(latestUserId, itemA);
+    firstInput.now = submittedAt;
+    const first = await submit(firstInput);
+    const secondInput = command(latestUserId, itemB);
+    secondInput.now = submittedAt + 1;
+    expect((await submit(secondInput)).status).toBe(201);
+    expect((await edit(latestUserId, first.body.reportId!, submittedAt + 2)).body.code).toBe("edit_not_latest");
+  });
+
+  it("allows the latest CLI rating to be corrected from the website", async () => {
+    const userId = crypto.randomUUID();
+    const submittedAt = Date.now();
+    const input = command(userId, itemA);
+    input.now = submittedAt;
+    const created = await submit(input);
+    await runtime.DB.prepare("update feedback_report set source = 'cli' where id = ?").bind(created.body.reportId).run();
+
+    expect(await edit(userId, created.body.reportId!, submittedAt + 1_000)).toMatchObject({
+      status: 200,
+      body: { edited: true }
+    });
   });
 
   it("retroactively downweights a cross-user device cluster before aggregation", async () => {

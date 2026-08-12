@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const FEEDBACK_EDIT_WINDOW_MS = 10 * 60_000;
+
 const feedbackAnswersSchema = z.object({
   resultQualityRating: z.number().int().min(1).max(5),
   usageEfficiencyRating: z.number().int().min(1).max(5),
@@ -17,6 +19,14 @@ export const feedbackInputSchema = z.object({
 }).strict();
 
 export type FeedbackInput = z.infer<typeof feedbackInputSchema>;
+
+export const feedbackEditInputSchema = z.object({
+  reportId: z.uuid(),
+  agentItemId: z.uuid().nullable().optional(),
+  ...feedbackAnswersSchema.shape
+}).strict();
+
+export type FeedbackEditInput = z.infer<typeof feedbackEditInputSchema>;
 
 const feedbackReportSchema = feedbackInputSchema.omit({ turnstileToken: true, deviceId: true });
 
@@ -42,3 +52,11 @@ export const allowanceCommandSchema = z.object({
 }).strict();
 
 export type AllowanceCommand = z.infer<typeof allowanceCommandSchema>;
+
+export const feedbackEditCommandSchema = z.object({
+  userId: z.uuid(),
+  now: z.number().int().positive(),
+  report: feedbackEditInputSchema
+}).strict();
+
+export type FeedbackEditCommand = z.infer<typeof feedbackEditCommandSchema>;

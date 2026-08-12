@@ -2232,7 +2232,7 @@ body {
   bottom: var(--space-md);
   display: grid;
   width: min(22rem, calc(100% - (var(--space-md) * 2)));
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: var(--space-sm);
   align-items: center;
   padding: var(--space-sm) var(--space-md);
@@ -2268,6 +2268,23 @@ body {
 .landing-page .feedback-toast small {
   color: var(--color-on-dark-muted);
   font-size: var(--text-xs);
+}
+
+.landing-page .feedback-toast-edit {
+  min-height: 2.25rem;
+  padding: var(--space-3xs) var(--space-xs);
+  border: var(--rule-thin) solid var(--color-on-dark-muted);
+  border-radius: var(--radius-round);
+  background: transparent;
+  color: var(--color-paper);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.landing-page .feedback-toast-edit:focus-visible {
+  outline: 2px solid var(--color-paper);
+  outline-offset: 2px;
 }
 
 @keyframes feedback-toast-in {

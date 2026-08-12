@@ -299,6 +299,24 @@ test("a trusted user can submit two reports while duplicate and third reports ar
     tags: []
   });
 
+  await page.getByRole("button", { name: "Edit once · 10 min" }).click();
+  await expect(feedbackDialog).toBeVisible();
+  await expect(feedbackDialog.locator("#feedback-title")).toContainText(/^Edit /);
+  await expect(feedbackDialog.getByLabel("Result quality: 5 out of 5")).toBeChecked();
+  await expect(feedbackDialog.getByLabel("Usage efficiency: 2 out of 5")).toBeChecked();
+  let editedAnswers: Record<string, unknown> | null = null;
+  page.on("request", (request) => {
+    if (request.method() === "PATCH" && request.url().endsWith("/api/feedback")) {
+      editedAnswers = request.postDataJSON() as Record<string, unknown>;
+    }
+  });
+  await feedbackDialog.getByLabel("Result quality: 4 out of 5").check();
+  await feedbackDialog.getByRole("button", { name: "Update rating" }).click();
+  await expect(feedbackDialog).toBeHidden();
+  await expect(page.getByRole("status").filter({ hasText: "Rating updated" })).toBeVisible();
+  expect(editedAnswers).toMatchObject({ resultQualityRating: 4, usageEfficiencyRating: 2 });
+  await expect(page.getByRole("button", { name: "Edit once · 10 min" })).toHaveCount(0);
+
   const duplicate = await submitFeedback(page, submittedItem!.id);
   expect(duplicate.status).toBe(409);
   expect(duplicate.body.code).toBe("item_already_rated");

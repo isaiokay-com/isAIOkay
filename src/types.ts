@@ -14,6 +14,16 @@ export interface FeedbackAllowance {
   alreadyRatedItemIds: string[];
 }
 
+export interface EditableFeedbackReport {
+  id: string;
+  trackedItemId: string;
+  agentItemId: string | null;
+  resultQualityRating: number;
+  usageEfficiencyRating: number;
+  tags: string[];
+  shortComment: string | null;
+}
+
 export interface RankingItem {
   id: string;
   name: string;

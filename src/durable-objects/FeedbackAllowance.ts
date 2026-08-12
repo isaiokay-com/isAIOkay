@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
-import { allowanceCommandSchema, type AllowanceCommand } from "../lib/feedback";
+import { allowanceCommandSchema, feedbackEditCommandSchema, FEEDBACK_EDIT_WINDOW_MS, type AllowanceCommand, type FeedbackEditCommand } from "../lib/feedback";
 import type { FeedbackAllowance as FeedbackAllowanceState } from "../types";
 
 const WINDOW_MS = 24 * 60 * 60_000;
@@ -13,15 +13,22 @@ interface AllowanceOutcome {
   allowance: FeedbackAllowanceState;
 }
 
-const json = (body: AllowanceOutcome, status = 200) => Response.json(body, { status, headers: { "content-type": "application/json" } });
+interface EditOutcome {
+  edited: boolean;
+  code?: "edit_not_latest" | "edit_expired" | "edit_already_used";
+  reportId?: string;
+  allowance: FeedbackAllowanceState;
+}
+
+const json = (body: AllowanceOutcome | EditOutcome, status = 200) => Response.json(body, { status, headers: { "content-type": "application/json" } });
 
 /**
  * One instance is addressed by internal user ID. It has no permanent feedback
  * state: D1 remains authoritative. A narrow promise queue serializes only
- * submissions for this user without blocking the entire object across D1 I/O.
+ * feedback commands for this user without blocking the entire object across D1 I/O.
  */
 export class FeedbackAllowance extends DurableObject<Env> {
-  private submissionQueue: Promise<void> = Promise.resolve();
+  private commandQueue: Promise<void> = Promise.resolve();
 
   constructor(state: DurableObjectState, private readonly bindings: Env) {
     super(state, bindings);
@@ -29,11 +36,16 @@ export class FeedbackAllowance extends DurableObject<Env> {
 
   override async fetch(request: Request): Promise<Response> {
     if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: { allow: "POST" } });
-    const parsed = allowanceCommandSchema.safeParse(await request.json().catch(() => null));
+    const pathname = new URL(request.url).pathname;
+    if (pathname !== "/submit" && pathname !== "/edit") return new Response("Not found", { status: 404 });
+    const isEdit = pathname === "/edit";
+    const parsed = (isEdit ? feedbackEditCommandSchema : allowanceCommandSchema).safeParse(await request.json().catch(() => null));
     if (!parsed.success) return new Response("Invalid allowance command", { status: 400 });
-    const submission = this.submissionQueue.then(() => this.submit(parsed.data));
-    this.submissionQueue = submission.then(() => undefined, () => undefined);
-    return submission;
+    const command = this.commandQueue.then(() => isEdit
+      ? this.edit(parsed.data as FeedbackEditCommand)
+      : this.submit(parsed.data as AllowanceCommand));
+    this.commandQueue = command.then(() => undefined, () => undefined);
+    return command;
   }
 
   private async allowanceFor(userId: string, now: number): Promise<FeedbackAllowanceState> {
@@ -151,5 +163,75 @@ export class FeedbackAllowance extends DurableObject<Env> {
     }
 
     return json({ accepted: true, idempotent: false, reportId, allowance: await this.allowanceFor(userId, now) }, 201);
+  }
+
+  private async edit(command: FeedbackEditCommand): Promise<Response> {
+    const { userId, now, report } = command;
+    const latest = await this.bindings.DB.prepare(
+      `select id, submitted_at, edited_at, agent_item_id, result_quality_rating,
+         usage_efficiency_rating, tags_json, short_comment
+       from feedback_report where user_id = ?
+       order by submitted_at desc, created_at desc, id desc limit 1`
+    ).bind(userId).first<{
+      id: string;
+      submitted_at: number;
+      edited_at: number | null;
+      agent_item_id: string | null;
+      result_quality_rating: number;
+      usage_efficiency_rating: number;
+      tags_json: string;
+      short_comment: string | null;
+    }>();
+    const allowance = async () => this.allowanceFor(userId, now);
+    if (!latest || latest.id !== report.reportId) {
+      return json({ edited: false, code: "edit_not_latest", allowance: await allowance() }, 409);
+    }
+    if (latest.edited_at !== null) {
+      return json({ edited: false, code: "edit_already_used", allowance: await allowance() }, 409);
+    }
+    if (now >= latest.submitted_at + FEEDBACK_EDIT_WINDOW_MS) {
+      return json({ edited: false, code: "edit_expired", allowance: await allowance() }, 410);
+    }
+
+    const before = {
+      agentItemId: latest.agent_item_id,
+      resultQualityRating: latest.result_quality_rating,
+      usageEfficiencyRating: latest.usage_efficiency_rating,
+      tagsJson: latest.tags_json,
+      shortComment: latest.short_comment
+    };
+    const after = {
+      agentItemId: report.agentItemId ?? null,
+      resultQualityRating: report.resultQualityRating,
+      usageEfficiencyRating: report.usageEfficiencyRating,
+      tagsJson: JSON.stringify(report.tags),
+      shortComment: report.shortComment ?? null
+    };
+    const [updated] = await this.bindings.DB.batch([
+      this.bindings.DB.prepare(
+        `update feedback_report set agent_item_id = ?, result_quality_rating = ?, usage_efficiency_rating = ?,
+           tags_json = ?, short_comment = ?, edited_at = ?, updated_at = ?
+         where id = ? and user_id = ? and edited_at is null`
+      ).bind(
+        after.agentItemId,
+        after.resultQualityRating,
+        after.usageEfficiencyRating,
+        after.tagsJson,
+        after.shortComment,
+        now,
+        now,
+        report.reportId,
+        userId
+      ),
+      this.bindings.DB.prepare(
+        `insert into audit_log (id, actor_user_id, action, entity_type, entity_id, before_json, after_json, created_at)
+         values (?, ?, 'edit_own_report', 'feedback_report', ?, ?, ?, ?)`
+      ).bind(crypto.randomUUID(), userId, report.reportId, JSON.stringify(before), JSON.stringify(after), now)
+    ]);
+    if ((updated?.meta.changes ?? 0) !== 1) {
+      return json({ edited: false, code: "edit_already_used", allowance: await allowance() }, 409);
+    }
+
+    return json({ edited: true, reportId: report.reportId, allowance: await allowance() });
   }
 }

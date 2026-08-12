@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { cliFeedbackInputSchema } from "../../src/lib/cli";
-import { feedbackInputSchema } from "../../src/lib/feedback";
+import { feedbackEditInputSchema, feedbackInputSchema } from "../../src/lib/feedback";
 
 const sharedAnswers = {
   resultQualityRating: 2,
@@ -26,6 +26,17 @@ describe("shared feedback questionnaire", () => {
       sessionDurationBucket: "10_30m",
       clientEventId: crypto.randomUUID()
     })).toMatchObject(sharedAnswers);
+  });
+
+  it("validates one-time web edit answers without allowing the model to change", () => {
+    const parsed = feedbackEditInputSchema.parse({
+      reportId: crypto.randomUUID(),
+      resultQualityRating: 5,
+      usageEfficiencyRating: 4,
+      tags: ["corrected"]
+    });
+    expect(parsed.resultQualityRating).toBe(5);
+    expect(feedbackEditInputSchema.safeParse({ ...parsed, trackedItemId: crypto.randomUUID() }).success).toBe(false);
   });
 
   it("rejects removed questionnaire fields instead of retaining a legacy contract", () => {

@@ -1,14 +1,14 @@
 import type { APIRoute } from "astro";
-import { getActiveItemById, getDuplicateClusterSignal, getSettings, getSuspicion, reportCountSince } from "../../db/repositories";
+import { getActiveItemById, getDuplicateClusterSignal, getLatestEditableFeedbackReport, getSettings, getSuspicion, reportCountSince } from "../../db/repositories";
 import { stableHash } from "../../lib/crypto";
-import { feedbackInputSchema } from "../../lib/feedback";
+import { feedbackEditInputSchema, feedbackInputSchema } from "../../lib/feedback";
 import { getClientKey, json, toErrorResponse } from "../../lib/http";
 import { enforceNamedRateLimit } from "../../lib/rate-limit";
 import { getRuntimeEnv } from "../../lib/runtime";
 import { needsTurnstile, verifyTurnstile } from "../../lib/turnstile";
 import { trustForAccountAge } from "../../lib/trust";
 import { requireIdentity } from "../../services/auth";
-import type { FeedbackAllowance } from "../../types";
+import type { EditableFeedbackReport, FeedbackAllowance } from "../../types";
 
 export const prerender = false;
 
@@ -20,24 +20,76 @@ interface AllowanceOutcome {
   allowance: FeedbackAllowance;
 }
 
+interface EditOutcome {
+  edited: boolean;
+  code?: string;
+  reportId?: string;
+  allowance: FeedbackAllowance;
+}
+
 export const GET: APIRoute = async (context) => {
   try {
     const env = getRuntimeEnv(context.locals);
     await enforceNamedRateLimit(env, "FEEDBACK_MODAL_RATE_LIMIT", getClientKey(context.request));
     const identity = await requireIdentity(context.request, env);
-    const settings = await getSettings(env);
-    const suspicious = await getSuspicion(env, identity.userId);
+    const now = Date.now();
+    const [settings, suspicious, latestEditableReport] = await Promise.all([
+      getSettings(env),
+      getSuspicion(env, identity.userId),
+      getLatestEditableFeedbackReport(env, identity.userId, now)
+    ]);
+    const requestedItemId = new URL(context.request.url).searchParams.get("trackedItemId");
+    const editableReport: EditableFeedbackReport | null = latestEditableReport?.trackedItemId === requestedItemId
+      ? latestEditableReport
+      : null;
     return json({
       authenticated: true,
       siteKey: env.TURNSTILE_SITE_KEY ?? null,
+      editableReport,
       requiresTurnstile: needsTurnstile({
         accountCreatedAt: identity.profile.githubAccountCreatedAt,
         suspicious,
         abnormalVelocity: false,
-        now: Date.now(),
+        now,
         settings
       })
     });
+  } catch (error) {
+    return toErrorResponse(error);
+  }
+};
+
+const editErrorMessages: Record<string, string> = {
+  edit_not_latest: "Only your latest rating can be edited.",
+  edit_expired: "The 10-minute edit window has expired.",
+  edit_already_used: "This rating has already used its one edit."
+};
+
+export const PATCH: APIRoute = async (context) => {
+  try {
+    const env = getRuntimeEnv(context.locals);
+    await enforceNamedRateLimit(env, "FEEDBACK_RATE_LIMIT", getClientKey(context.request));
+    const identity = await requireIdentity(context.request, env);
+    const input = feedbackEditInputSchema.parse(await context.request.json());
+    if (input.agentItemId) {
+      const agent = await getActiveItemById(env, input.agentItemId);
+      if (!agent?.isActive || agent.type !== "agent") {
+        return json({ error: { code: "unknown_agent", message: "That coding agent is not available as report context." } }, { status: 422 });
+      }
+    }
+
+    const objectId = env.FEEDBACK_ALLOWANCE.idFromName(identity.userId);
+    const response = await env.FEEDBACK_ALLOWANCE.get(objectId).fetch("https://feedback-allowance/edit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: identity.userId, now: Date.now(), report: input })
+    });
+    const outcome = await response.json() as EditOutcome;
+    if (!response.ok || !outcome.edited) {
+      const code = outcome.code ?? "edit_failed";
+      return json({ ...outcome, error: { code, message: editErrorMessages[code] ?? "Your rating could not be updated." } }, { status: response.status });
+    }
+    return json(outcome);
   } catch (error) {
     return toErrorResponse(error);
   }
@@ -105,7 +157,10 @@ export const POST: APIRoute = async (context) => {
       })
     });
     const outcome = await response.json() as AllowanceOutcome;
-    return json(outcome, { status: response.status });
+    const editableReport = outcome.accepted && outcome.reportId
+      ? await getLatestEditableFeedbackReport(env, identity.userId, now)
+      : null;
+    return json({ ...outcome, editableReport }, { status: response.status });
   } catch (error) {
     return toErrorResponse(error);
   }

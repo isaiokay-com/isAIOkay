@@ -1,0 +1,1 @@
+ALTER TABLE `feedback_report` ADD `edited_at` integer;

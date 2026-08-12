@@ -85,6 +85,13 @@
       "when": 1786354459111,
       "tag": "0011_early_harrier",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1786540016321,
+      "tag": "0012_closed_gunslinger",
+      "breakpoints": true
     }
   ]
 }

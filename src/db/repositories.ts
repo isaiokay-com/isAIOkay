@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type { Env } from "../env";
-import { DEFAULT_SETTINGS, type AggregatePeriod, type AppSettings, type FeedbackAllowance, type ModelPageHistory, type ModelSitemapEntry, type Period, type PublicRankingPayload, type RankingItem, type UserStatus } from "../types";
+import { DEFAULT_SETTINGS, type AggregatePeriod, type AppSettings, type EditableFeedbackReport, type FeedbackAllowance, type ModelPageHistory, type ModelSitemapEntry, type Period, type PublicRankingPayload, type RankingItem, type UserStatus } from "../types";
 import { CURRENT_SCHEMA_VERSION } from "../types";
 import { getDb } from "./client";
 import { aggregate, settings, trackedItem, userProfile } from "./schema";
@@ -11,6 +11,7 @@ import { summarizeAgentContexts, type AgentContextReport } from "../lib/agent-co
 import { isGitHubUsername, isSafeHttpsUrl, isXUsername } from "../lib/security";
 import { parseAppSettings } from "../lib/settings";
 import { trustForAccountAge } from "../lib/trust";
+import { FEEDBACK_EDIT_WINDOW_MS } from "../lib/feedback";
 
 const DAY_MS = 86_400_000;
 
@@ -434,6 +435,39 @@ const normalizeTags = (value: string): string[] => {
   } catch {
     return [];
   }
+};
+
+export const getLatestEditableFeedbackReport = async (
+  env: Env,
+  userId: string,
+  now = Date.now()
+): Promise<EditableFeedbackReport | null> => {
+  const report = await env.DB.prepare(
+    `select id, tracked_item_id, agent_item_id, result_quality_rating, usage_efficiency_rating,
+       tags_json, short_comment, submitted_at, edited_at
+     from feedback_report where user_id = ?
+     order by submitted_at desc, created_at desc, id desc limit 1`
+  ).bind(userId).first<{
+    id: string;
+    tracked_item_id: string;
+    agent_item_id: string | null;
+    result_quality_rating: number;
+    usage_efficiency_rating: number;
+    tags_json: string;
+    short_comment: string | null;
+    submitted_at: number;
+    edited_at: number | null;
+  }>();
+  if (!report || report.edited_at !== null || now >= report.submitted_at + FEEDBACK_EDIT_WINDOW_MS) return null;
+  return {
+    id: report.id,
+    trackedItemId: report.tracked_item_id,
+    agentItemId: report.agent_item_id,
+    resultQualityRating: report.result_quality_rating,
+    usageEfficiencyRating: report.usage_efficiency_rating,
+    tags: normalizeTags(report.tags_json),
+    shortComment: report.short_comment
+  };
 };
 
 const topTags = (rows: Array<{ tags_json: string; result_quality_rating: number; usage_efficiency_rating: number }>, direction: "positive" | "negative"): string[] => {
