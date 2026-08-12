@@ -12,13 +12,14 @@ describe("analytics privacy policy", () => {
     expect(isAnalyticsPath("/admin")).toBe(false);
     expect(isAnalyticsPath("/admin/reports")).toBe(false);
     expect(isAnalyticsPath("/api/items")).toBe(false);
+    expect(isAnalyticsPath("/ph/e")).toBe(false);
     expect(isAnalyticsPath("/privacy")).toBe(false);
   });
 
   it("accepts only supported PostHog Cloud ingestion hosts", () => {
     expect(postHogHost("https://us.i.posthog.com/")).toBe("https://us.i.posthog.com");
     expect(postHogHost("https://untrusted.example")).toBeNull();
-    expect(postHogHost(undefined)).toBe("https://eu.i.posthog.com");
+    expect(postHogHost(undefined)).toBe("https://us.i.posthog.com");
   });
 
   it("allows only public project keys into rendered analytics configuration", () => {

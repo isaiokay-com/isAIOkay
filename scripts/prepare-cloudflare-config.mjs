@@ -30,7 +30,7 @@ if (postHogKey && !/^phc_[A-Za-z0-9_-]{10,}$/.test(postHogKey)) {
   throw new Error("POSTHOG_KEY is malformed.");
 }
 const postHogHost = postHogKey
-  ? process.env.POSTHOG_HOST?.trim().replace(/\/$/, "") || "https://eu.i.posthog.com"
+  ? process.env.POSTHOG_HOST?.trim().replace(/\/$/, "") || "https://us.i.posthog.com"
   : undefined;
 if (postHogHost && !["https://eu.i.posthog.com", "https://us.i.posthog.com"].includes(postHogHost)) {
   throw new Error("POSTHOG_HOST must be a supported PostHog Cloud ingestion origin.");

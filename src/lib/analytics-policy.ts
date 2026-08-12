@@ -1,10 +1,10 @@
 const POSTHOG_HOSTS = new Set([
-  "https://eu.i.posthog.com",
-  "https://us.i.posthog.com"
+  "https://us.i.posthog.com",
+  "https://eu.i.posthog.com"
 ]);
 
 const modelPagePattern = /^\/[a-z0-9-]+\/[a-z0-9.-]+\/?$/;
-const privateRouteRoots = new Set(["admin", "api", "cli", "u"]);
+const privateRouteRoots = new Set(["admin", "api", "cli", "ph", "u"]);
 const publicProjectKeyPattern = /^phc_[A-Za-z0-9_-]{10,}$/;
 
 /** Analytics is limited to the public ranking and canonical model pages. */
@@ -15,7 +15,7 @@ export const isAnalyticsPath = (pathname: string): boolean => {
 };
 
 export const postHogHost = (configuredHost: string | undefined): string | null => {
-  const normalized = configuredHost?.trim().replace(/\/$/, "") || "https://eu.i.posthog.com";
+  const normalized = configuredHost?.trim().replace(/\/$/, "") || "https://us.i.posthog.com";
   return POSTHOG_HOSTS.has(normalized) ? normalized : null;
 };
 

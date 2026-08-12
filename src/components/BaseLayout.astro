@@ -34,7 +34,7 @@ const {
 } = Astro.props;
 const env = getRuntimeEnv(Astro.locals);
 const postHogKey = analytics ? postHogProjectKey(env.POSTHOG_KEY) : null;
-const postHogApiHost = postHogKey ? postHogHost(env.POSTHOG_HOST) : null;
+const postHogIngestionHost = postHogKey ? postHogHost(env.POSTHOG_HOST) : null;
 const origin = Astro.site ?? new URL("https://isaiokay.com");
 const canonicalUrl = new URL(Astro.url.pathname, origin).toString();
 const socialImage = new URL(image, origin).toString();
@@ -92,7 +92,7 @@ const structuredDataJson = structuredData
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
     {structuredDataJson && <script is:inline type="application/ld+json" set:html={structuredDataJson} />}
-    {postHogKey && postHogApiHost && <PostHogAnalytics apiKey={postHogKey} apiHost={postHogApiHost} />}
+    {postHogKey && postHogIngestionHost && <PostHogAnalytics apiKey={postHogKey} />}
     <title>{title}</title>
   </head>
   <body>

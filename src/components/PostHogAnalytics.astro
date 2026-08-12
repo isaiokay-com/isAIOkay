@@ -3,7 +3,6 @@ import { serializeJsonForHtml } from "../lib/security";
 
 interface Props {
   apiKey: string;
-  apiHost: string;
 }
 
 const config = serializeJsonForHtml(Astro.props satisfies Props);
@@ -15,13 +14,14 @@ const config = serializeJsonForHtml(Astro.props satisfies Props);
   import type { AnalyticsEvents } from "../lib/analytics";
 
   const configNode = document.querySelector<HTMLScriptElement>("#posthog-analytics-config");
-  const config = configNode ? JSON.parse(configNode.textContent ?? "null") as { apiKey?: string; apiHost?: string } | null : null;
+  const config = configNode ? JSON.parse(configNode.textContent ?? "null") as { apiKey?: string } | null : null;
 
-  if (config?.apiKey && config.apiHost && isAnalyticsPath(window.location.pathname)) {
+  if (config?.apiKey && isAnalyticsPath(window.location.pathname)) {
     posthog.init(config.apiKey, {
-      api_host: config.apiHost,
-      defaults: "2026-06-25",
-      cookieless_mode: "always",
+      api_host: `${window.location.origin}/ph`,
+      defaults: "2026-05-30",
+      persistence: "localStorage+cookie",
+      cross_subdomain_cookie: false,
       person_profiles: "never",
       autocapture: false,
       rageclick: false,

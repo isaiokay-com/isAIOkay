@@ -26,9 +26,9 @@ Add these non-secret variables to the `production` environment:
 | Variable | Purpose |
 | --- | --- |
 | `POSTHOG_KEY` | Optional public PostHog project key (`phc_...`). Analytics remains disabled when omitted. |
-| `POSTHOG_HOST` | PostHog Cloud ingestion origin. Use `https://eu.i.posthog.com` (default) or `https://us.i.posthog.com` to match the project region. |
+| `POSTHOG_HOST` | Upstream PostHog Cloud ingestion origin used by the same-origin `/ph` proxy. This project defaults to its PostHog US region at `https://us.i.posthog.com`; use `https://eu.i.posthog.com` only for an EU-region project. |
 
-Before setting `POSTHOG_KEY`, enable cookieless web analytics in that PostHog project's settings. The client deliberately uses cookieless mode; PostHog discards those events when the project-level setting is disabled. The integration records page views and a small allowlist of explicit product events only. Session replay, page-leave capture, autocapture, heatmaps, surveys, feature flags, performance capture, and automatic error capture are disabled in code.
+The browser client uses a persistent first-party anonymous identifier so PostHog can measure returning visits from the same browser. Event ingestion is forwarded through the Worker's `/ph` route to the configured cloud region; browser cookies and unrelated headers are not forwarded upstream. The integration records page views and a small allowlist of explicit product events only. It does not identify application users. Session replay, page-leave capture, autocapture, heatmaps, surveys, feature flags, performance capture, and automatic error capture are disabled in code.
 
 The workflow generates an ephemeral production `wrangler.jsonc`, applies D1
 migrations and the idempotent production bootstrap, and deploys Astro's
@@ -89,8 +89,7 @@ wrangler secret put GITHUB_CLIENT_SECRET
 wrangler secret put TURNSTILE_SECRET_KEY
 
 # configure non-secret canonical URL/site key in Wrangler vars, then deploy
-# optionally add POSTHOG_KEY and POSTHOG_HOST to Wrangler vars after enabling
-# cookieless mode in the matching PostHog Cloud project
+# optionally add POSTHOG_KEY and POSTHOG_HOST to Wrangler vars
 npm run deploy
 ```
 

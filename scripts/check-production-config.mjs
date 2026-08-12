@@ -20,7 +20,7 @@ try {
         CLOUDFLARE_KV_NAMESPACE_ID: "00000000000000000000000000000001",
         TURNSTILE_SITE_KEY: turnstileSiteKey,
         POSTHOG_KEY: analytics ? postHogKey : "",
-        POSTHOG_HOST: analytics ? "https://eu.i.posthog.com" : "",
+        POSTHOG_HOST: analytics ? "https://us.i.posthog.com" : "",
       },
     });
     if (result.status !== 0) {
@@ -44,7 +44,7 @@ try {
   if (config.vars?.TURNSTILE_SITE_KEY !== turnstileSiteKey) {
     throw new Error("TURNSTILE_SITE_KEY was not injected into Worker vars.");
   }
-  if (config.vars?.POSTHOG_KEY !== postHogKey || config.vars?.POSTHOG_HOST !== "https://eu.i.posthog.com") {
+  if (config.vars?.POSTHOG_KEY !== postHogKey || config.vars?.POSTHOG_HOST !== "https://us.i.posthog.com") {
     throw new Error("PostHog public configuration was not injected into Worker vars.");
   }
 

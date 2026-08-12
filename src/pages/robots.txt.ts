@@ -3,6 +3,6 @@ import type { APIRoute } from "astro";
 export const prerender = false;
 
 export const GET: APIRoute = () => new Response(
-  `User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /admin\nDisallow: /cli/\nSitemap: https://isaiokay.com/sitemap.xml\n`,
+  `User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /admin\nDisallow: /cli/\nDisallow: /ph/\nSitemap: https://isaiokay.com/sitemap.xml\n`,
   { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=3600" } }
 );
