@@ -172,9 +172,10 @@ export const reconcileVotingSpikes = async (env: Env, now: number): Promise<void
   await env.DB.batch(updates);
 
   const userRows = await env.DB.prepare(
-    `select distinct user_id from feedback_report
-     where submitted_at >= ?
-       and (duplicate_cluster_adjustment < 1 or fraud_risk_score >= 0.35)`
+    `select distinct r.user_id from feedback_report r
+     join user_profile p on p.user_id = r.user_id and p.status != 'deleted'
+     where r.submitted_at >= ?
+       and (r.duplicate_cluster_adjustment < 1 or r.fraud_risk_score >= 0.35)`
   ).bind(shortWindow).all<{ user_id: string }>();
   const userIds = userRows.results.map((row) => row.user_id);
   if (userIds.length === 0) return;

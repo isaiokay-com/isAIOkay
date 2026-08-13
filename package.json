@@ -36,7 +36,7 @@
     "deploy:preflight": "node scripts/preflight-production-auth.mjs",
     "deploy:config:check": "node scripts/check-production-config.mjs",
     "e2e:prepare": "wrangler d1 migrations apply is-ai-okay --local --config ./wrangler.example.jsonc && wrangler d1 execute is-ai-okay --local --config ./wrangler.example.jsonc --file=./scripts/seed.sql && wrangler d1 execute is-ai-okay --local --config ./wrangler.example.jsonc --file=./scripts/reset-e2e.sql",
-    "e2e:server": "npm run e2e:prepare && WRANGLER_CONFIG_PATH=./wrangler.example.jsonc npm run dev:worker -- --port ${PLAYWRIGHT_PORT:-8787} --var BETTER_AUTH_URL:http://127.0.0.1:${PLAYWRIGHT_PORT:-8787} --var BETTER_AUTH_SECRET:development-e2e-secret-with-at-least-thirty-two-characters --var MOCK_GITHUB_AUTH:true",
+    "e2e:server": "npm run e2e:prepare && WRANGLER_CONFIG_PATH=./wrangler.example.jsonc npm run dev:worker -- --port ${PLAYWRIGHT_PORT:-8787} --var BETTER_AUTH_URL:http://127.0.0.1:${PLAYWRIGHT_PORT:-8787} --var BETTER_AUTH_SECRET:development-e2e-secret-with-at-least-thirty-two-characters --var DELETED_IDENTITY_SECRET:development-e2e-deleted-identity-secret-at-least-thirty-two-characters --var MOCK_GITHUB_AUTH:true",
     "auth:generate": "npx --yes auth@1.6.25 generate --config ./better-auth.cli.ts --output ./.generated/better-auth.sql --yes",
     "cf:types": "wrangler types",
     "deploy": "npm run build && wrangler deploy --config ./dist/server/wrangler.json",

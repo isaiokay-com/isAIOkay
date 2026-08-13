@@ -12,6 +12,8 @@ import { isGitHubUsername, isSafeHttpsUrl, isXUsername } from "../lib/security";
 import { parseAppSettings } from "../lib/settings";
 import { trustForAccountAge } from "../lib/trust";
 import { FEEDBACK_EDIT_WINDOW_MS } from "../lib/feedback";
+import { getDeletedGitHubIdentityHash } from "../lib/deleted-identity";
+import { isConfiguredAdministratorGitHubId } from "../lib/administration";
 
 const DAY_MS = 86_400_000;
 
@@ -164,6 +166,13 @@ export const getGithubAccountId = async (env: Env, userId: string): Promise<stri
   return row?.account_id ?? null;
 };
 
+export const hasDeletedGitHubIdentity = async (env: Env, githubUserId: string): Promise<boolean> => {
+  const identityHash = await getDeletedGitHubIdentityHash(env.DELETED_IDENTITY_SECRET, githubUserId);
+  const row = await env.DB.prepare("select 1 as found from deleted_identity where identity_hash = ? limit 1")
+    .bind(identityHash).first<{ found: number }>();
+  return row?.found === 1;
+};
+
 const releaseReassignedGithubUsername = (env: Env, userId: string, githubUserId: string, githubUsername: string): D1PreparedStatement[] => [
   env.DB.prepare(
     `update user_profile
@@ -185,6 +194,9 @@ export const ensureProfile = async (args: {
   const now = args.now ?? Date.now();
   if (!args.githubUserId.trim() || !isGitHubUsername(args.githubUsername) || !Number.isFinite(args.githubAccountCreatedAt)) {
     throw new Error("Invalid GitHub identity metadata");
+  }
+  if (await hasDeletedGitHubIdentity(args.env, args.githubUserId)) {
+    throw new Error("This GitHub identity belongs to a deleted account");
   }
   const githubAvatarUrl = args.image && isSafeHttpsUrl(args.image) ? args.image : null;
   const existing = await getProfile(args.env, args.userId);
@@ -234,10 +246,68 @@ export const updateProfilePreferences = async (
   env: Env,
   userId: string,
   preferences: { publicProfileEnabled: boolean; xUsername: string | null }
-): Promise<void> => {
+): Promise<boolean> => {
   if (preferences.xUsername !== null && !isXUsername(preferences.xUsername)) throw new Error("Invalid X username");
-  await env.DB.prepare("update user_profile set public_profile_enabled = ?, x_username = ? where user_id = ?")
+  const result = await env.DB.prepare(
+    "update user_profile set public_profile_enabled = ?, x_username = ? where user_id = ? and status in ('active', 'admin')"
+  )
     .bind(preferences.publicProfileEnabled ? 1 : 0, preferences.xUsername, userId).run();
+  return (result.meta.changes ?? 0) === 1;
+};
+
+/**
+ * Remove an account's identifying and access data while retaining its minimal
+ * de-identified rating records and a secret-keyed deletion marker. Optional
+ * free-form report context and linkable anti-abuse identifiers are scrubbed.
+ */
+export const deleteOwnAccount = async (env: Env, userId: string, now = Date.now()): Promise<{ previousUsername: string }> => {
+  const profile = await getProfile(env, userId);
+  if (!profile || profile.status === "deleted") throw new Error("Account is already unavailable");
+  if (profile.status === "admin" || isConfiguredAdministratorGitHubId(env, profile.githubUserId)) {
+    throw new Error("Administrators must be demoted and removed from the allowlist before deleting their account");
+  }
+  const user = await env.DB.prepare("select email from user where id = ?").bind(userId).first<{ email: string }>();
+  if (!user) throw new Error("Account is already unavailable");
+  const tombstone = `deleted-${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
+  const deletedIdentityHash = await getDeletedGitHubIdentityHash(env.DELETED_IDENTITY_SECRET, profile.githubUserId);
+  await env.DB.batch([
+    env.DB.prepare("insert into deleted_identity (identity_hash, deleted_at) values (?, ?) on conflict(identity_hash) do nothing")
+      .bind(deletedIdentityHash, now),
+    env.DB.prepare(
+      `update feedback_report set tags_json = '[]', short_comment = null,
+       ip_hash = null, device_hash = null, feedback_context_id = null,
+       idempotency_key = 'deleted:' || id, client_event_id = null, updated_at = ?
+       where user_id = ?`
+    ).bind(now, userId),
+    env.DB.prepare("delete from feedback_context where user_id = ?").bind(userId),
+    env.DB.prepare("delete from cli_turnstile_challenge where user_id = ?").bind(userId),
+    env.DB.prepare("delete from cli_device_authorization where user_id = ?").bind(userId),
+    env.DB.prepare("delete from cli_installation where user_id = ?").bind(userId),
+    env.DB.prepare("delete from risk_event where user_id = ?").bind(userId),
+    env.DB.prepare("delete from session where userId = ?").bind(userId),
+    env.DB.prepare("delete from account where userId = ?").bind(userId),
+    env.DB.prepare("delete from verification where identifier = ?").bind(user.email),
+    env.DB.prepare(
+      `update audit_log set actor_user_id = null,
+       before_json = case when action = 'edit_own_report' then null else before_json end,
+       after_json = case when action in ('edit_own_report', 'request_catalog_candidate') then null else after_json end
+       where actor_user_id = ?`
+    ).bind(userId),
+    env.DB.prepare(
+      `update user set name = 'Deleted user', email = ?, image = null,
+       githubUsername = null, githubAccountCreatedAt = null, createdAt = ?, updatedAt = ? where id = ?`
+    ).bind(`${tombstone}@isaiokay.invalid`, now, now, userId),
+    env.DB.prepare(
+      `update user_profile set github_user_id = ?, github_username = ?, github_display_name = null,
+       github_avatar_url = null, github_account_created_at = 0, x_username = null,
+       trust_category = 'blocked', trust_weight = 0, status = 'deleted', public_profile_enabled = 0,
+       first_login_at = ?, last_login_at = ?, deleted_at = ? where user_id = ?`
+    ).bind(tombstone, tombstone, now, now, now, userId),
+    env.DB.prepare(
+      "insert into audit_log (id, actor_user_id, action, entity_type, entity_id, after_json, created_at) values (?, null, 'delete_own_account', 'user_profile', ?, ?, ?)"
+    ).bind(crypto.randomUUID(), tombstone, JSON.stringify({ anonymized: true }), now)
+  ]);
+  return { previousUsername: profile.githubUsername };
 };
 
 export interface AgentOption {
@@ -364,22 +434,24 @@ export const getPublicProfileView = async (
 ): Promise<PublicProfileView | null> => {
   if (!isGitHubUsername(username)) return null;
   const profile = await env.DB.prepare(
-    `select up.user_id, up.github_username, up.github_display_name, up.github_avatar_url, up.x_username, up.public_profile_enabled, u.name
+    `select up.user_id, up.github_username, up.github_display_name, up.github_avatar_url, up.x_username, up.public_profile_enabled, up.status, u.name
      from user_profile up join user u on u.id = up.user_id
-     where lower(up.github_username) = lower(?) and up.status in ('active', 'admin')
+     where lower(up.github_username) = lower(?)
+       and (up.status in ('active', 'admin') or up.user_id = ?)
      limit 1`
-  ).bind(username).first<{
+  ).bind(username, viewerUserId).first<{
     user_id: string;
     github_username: string;
     github_display_name: string | null;
     github_avatar_url: string | null;
     x_username: string | null;
     public_profile_enabled: number;
+    status: string;
     name: string;
   }>();
   if (!profile?.github_username) return null;
   const isOwner = viewerUserId === profile.user_id;
-  const isPublic = Boolean(profile.public_profile_enabled);
+  const isPublic = (profile.status === "active" || profile.status === "admin") && Boolean(profile.public_profile_enabled);
   if (!isPublic && !isOwner) return null;
 
   const [ratingsPage, reportCountRow, modelRows] = await Promise.all([
@@ -757,13 +829,14 @@ export const setReportModeration = async (args: {
   ]);
 };
 
-export const setUserStatus = async (args: { env: Env; userId: string; status: UserStatus; actorUserId: string }): Promise<void> => {
+export const setUserStatus = async (args: { env: Env; userId: string; status: Exclude<UserStatus, "deleted">; actorUserId: string }): Promise<void> => {
   const before = await getProfile(args.env, args.userId);
   if (!before) throw new Error("User profile not found");
+  if (before.status === "deleted") throw new Error("Deleted accounts cannot be reactivated");
   const now = Date.now();
   await args.env.DB.batch([
-    args.env.DB.prepare("update user_profile set status = ?, deleted_at = case when ? = 'deleted' then ? else deleted_at end where user_id = ?")
-      .bind(args.status, args.status, now, args.userId),
+    args.env.DB.prepare("update user_profile set status = ? where user_id = ?")
+      .bind(args.status, args.userId),
     args.env.DB.prepare("insert into audit_log (id, actor_user_id, action, entity_type, entity_id, before_json, after_json, created_at) values (?, ?, 'change_user_status', 'user_profile', ?, ?, ?, ?)")
       .bind(crypto.randomUUID(), args.actorUserId, args.userId, JSON.stringify({ status: before.status }), JSON.stringify({ status: args.status }), now)
   ]);

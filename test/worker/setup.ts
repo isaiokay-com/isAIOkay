@@ -4,8 +4,12 @@ import type { Env } from "../../src/env";
 export const prepareTestDatabase = async (env: Env): Promise<void> => {
   await env.DB.exec(`
     create table if not exists user (id text primary key, name text not null, email text not null unique, emailVerified integer not null, image text, githubUsername text, githubAccountCreatedAt integer, createdAt integer not null, updatedAt integer not null);
+    create table if not exists session (id text primary key, userId text not null, token text not null unique, expiresAt integer not null, ipAddress text, userAgent text, createdAt integer not null, updatedAt integer not null);
+    create table if not exists account (id text primary key, userId text not null, accountId text not null, providerId text not null, accessToken text, refreshToken text, idToken text, accessTokenExpiresAt integer, refreshTokenExpiresAt integer, scope text, password text, createdAt integer not null, updatedAt integer not null, unique(providerId, accountId));
+    create table if not exists verification (id text primary key, identifier text not null, value text not null, expiresAt integer not null, createdAt integer not null, updatedAt integer not null);
     create table if not exists user_profile (user_id text primary key, github_user_id text not null unique, github_username text not null, github_display_name text, github_avatar_url text, github_account_created_at integer not null, x_username text, trust_category text not null, trust_weight real not null, status text not null, public_profile_enabled integer not null default 0, first_login_at integer not null, last_login_at integer not null, deleted_at integer);
     create unique index if not exists user_profile_github_username_unique on user_profile(lower(github_username));
+    create table if not exists deleted_identity (identity_hash text primary key, deleted_at integer not null);
     create table if not exists tracked_item (id text primary key, name text not null, slug text not null unique, provider_name text not null, type text not null, description text, logo_url text, official_url text not null, pricing_summary text, pricing_last_verified_at integer, version_label text, release_at integer, baseline_start_at integer, baseline_end_at integer, baseline_locked_at integer, baseline_method_version text, release_source_url text, is_active integer not null default 1, sort_order integer not null default 0, created_at integer not null, updated_at integer not null);
     create table if not exists cli_device_authorization (id text primary key, device_code_hash text not null unique, user_code text not null unique, status text not null default 'pending', user_id text, client_name text not null, created_at integer not null, expires_at integer not null, approved_at integer, consumed_at integer);
     create table if not exists cli_installation (id text primary key, user_id text not null, label text not null, token_hash text not null unique, scopes_json text not null, created_at integer not null, last_used_at integer, expires_at integer not null, revoked_at integer);
@@ -26,6 +30,10 @@ export const prepareTestDatabase = async (env: Env): Promise<void> => {
     create index if not exists audit_log_entity_idx on audit_log (entity_type, entity_id, created_at);
     create table if not exists aggregation_job_lock (key text primary key, locked_until integer not null, updated_at integer not null);
     create table if not exists risk_event (id text primary key, user_id text, kind text not null, score real not null, expires_at integer not null, created_at integer not null);
+    create trigger if not exists deleted_profile_blocks_user_update before update on user when exists (select 1 from user_profile where user_id = old.id and status = 'deleted') begin select raise(abort, 'deleted account is immutable'); end;
+    create trigger if not exists deleted_profile_blocks_account_insert before insert on account when exists (select 1 from user_profile where user_id = new.userId and status = 'deleted') begin select raise(abort, 'deleted account cannot create access data'); end;
+    create trigger if not exists deleted_profile_blocks_session_insert before insert on session when exists (select 1 from user_profile where user_id = new.userId and status = 'deleted') begin select raise(abort, 'deleted account cannot create access data'); end;
+    create trigger if not exists deleted_profile_blocks_reactivation before update of status on user_profile when old.status = 'deleted' and new.status != 'deleted' begin select raise(abort, 'deleted account cannot be reactivated'); end;
   `);
 };
 

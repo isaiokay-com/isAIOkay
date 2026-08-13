@@ -168,6 +168,15 @@ export const userProfile = sqliteTable(
   ]
 );
 
+/**
+ * A keyed one-way marker is retained after self-deletion so the same GitHub
+ * identity cannot create a fresh account and reset voting limits.
+ */
+export const deletedIdentity = sqliteTable("deleted_identity", {
+  identityHash: text("identity_hash").primaryKey(),
+  deletedAt: integer("deleted_at").notNull()
+});
+
 export const feedbackReport = sqliteTable(
   "feedback_report",
   {
@@ -394,6 +403,7 @@ export const schema = {
   trackedItem,
   catalogCandidate,
   userProfile,
+  deletedIdentity,
   feedbackReport,
   cliDeviceAuthorization,
   cliInstallation,

@@ -60,3 +60,10 @@ export const feedbackEditCommandSchema = z.object({
 }).strict();
 
 export type FeedbackEditCommand = z.infer<typeof feedbackEditCommandSchema>;
+
+export const accountDeletionCommandSchema = z.object({
+  userId: z.uuid(),
+  now: z.number().int().positive()
+}).strict();
+
+export type AccountDeletionCommand = z.infer<typeof accountDeletionCommandSchema>;

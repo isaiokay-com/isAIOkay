@@ -1,5 +1,6 @@
 # Development-only secrets. Copy to .dev.vars; never commit its real values.
 BETTER_AUTH_SECRET=replace-with-at-least-32-random-characters
+DELETED_IDENTITY_SECRET=replace-with-a-separate-stable-32-character-secret
 BETTER_AUTH_URL=http://localhost:4321
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=

@@ -1,4 +1,5 @@
 import type { APIRoute } from "astro";
+import { hasDeletedGitHubIdentity } from "../../../db/repositories";
 import { appendSetCookie, json, toErrorResponse } from "../../../lib/http";
 import { getRuntimeEnv } from "../../../lib/runtime";
 import { DEVELOPMENT_USER_COOKIE, isDevelopmentMockEnabled } from "../../../services/auth";
@@ -50,6 +51,9 @@ export const POST: APIRoute = async (context) => {
     if (!isDevelopmentMockEnabled(context.request, env)) return new Response("Not found", { status: 404 });
     const body = await context.request.json().catch(() => ({})) as { identity?: keyof typeof identities };
     const identity = identities[body.identity ?? "trusted"];
+    if (await hasDeletedGitHubIdentity(env, identity.githubUserId)) {
+      return json({ error: { code: "account_deleted", message: "This GitHub account was previously deleted and cannot be registered again." } }, { status: 403 });
+    }
     const now = Date.now();
     const accountCreatedAt = now - identity.ageDays * 86_400_000;
     await env.DB.batch([

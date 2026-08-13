@@ -39,6 +39,8 @@ The public ranking contains models only. Agent records remain in `tracked_item` 
 
 X-linked developer profiles are private by default. An authenticated owner can opt in to a public `/u/{username}` view. Public profile queries return only structured rating fields and agent context; comments, session hashes, trust data, risk signals, and network/device hashes never leave private application paths.
 
+An owner can self-delete from profile settings after typing their exact GitHub username. The command runs through the same per-user Durable Object queue as report submissions and edits, then revokes sessions and CLI installations, removes public identity fields, and scrubs optional report text plus retained network/device hashes. Minimal de-identified rating records remain attached to a random internal tombstone so historical aggregates retain their integrity. A permanent secret-keyed one-way marker of the stable GitHub ID prevents the deleted identity from registering again and resetting its allowance. Administrators must first be demoted and removed from the stable-ID allowlist so their audit history cannot be orphaned accidentally.
+
 ## Aggregation flow
 
 The Cron Trigger runs every ten minutes. A compare-and-set D1 lock prevents overlapping aggregate runs. The job first reconciles multi-account device/network clusters, then recalculates the live consensus plus optional 24-hour and seven-day D1 aggregates, cleans expired risk data, locks qualified release baselines, and generates versioned KV payloads. Authentication-provider metadata is never refreshed by Cron.

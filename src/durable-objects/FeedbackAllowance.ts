@@ -1,31 +1,39 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
-import { allowanceCommandSchema, feedbackEditCommandSchema, FEEDBACK_EDIT_WINDOW_MS, type AllowanceCommand, type FeedbackEditCommand } from "../lib/feedback";
+import { deleteOwnAccount, hasDeletedGitHubIdentity } from "../db/repositories";
+import { accountDeletionCommandSchema, allowanceCommandSchema, feedbackEditCommandSchema, FEEDBACK_EDIT_WINDOW_MS, type AccountDeletionCommand, type AllowanceCommand, type FeedbackEditCommand } from "../lib/feedback";
 import type { FeedbackAllowance as FeedbackAllowanceState } from "../types";
+import { isConfiguredAdministratorGitHubId } from "../lib/administration";
 
 const WINDOW_MS = 24 * 60 * 60_000;
 
 interface AllowanceOutcome {
   accepted: boolean;
   idempotent: boolean;
-  code?: "allowance_exhausted" | "item_already_rated" | "session_already_rated";
+  code?: "account_unavailable" | "allowance_exhausted" | "item_already_rated" | "session_already_rated";
   reportId?: string;
   allowance: FeedbackAllowanceState;
 }
 
 interface EditOutcome {
   edited: boolean;
-  code?: "edit_not_latest" | "edit_expired" | "edit_already_used";
+  code?: "account_unavailable" | "edit_not_latest" | "edit_expired" | "edit_already_used";
   reportId?: string;
   allowance: FeedbackAllowanceState;
 }
 
-const json = (body: AllowanceOutcome | EditOutcome, status = 200) => Response.json(body, { status, headers: { "content-type": "application/json" } });
+interface DeletionOutcome {
+  deleted: boolean;
+  code?: "account_unavailable" | "administrator_deletion_blocked";
+  previousUsername?: string;
+}
+
+const json = (body: AllowanceOutcome | EditOutcome | DeletionOutcome, status = 200) => Response.json(body, { status, headers: { "content-type": "application/json" } });
 
 /**
  * One instance is addressed by internal user ID. It has no permanent feedback
- * state: D1 remains authoritative. A narrow promise queue serializes only
- * feedback commands for this user without blocking the entire object across D1 I/O.
+ * state: D1 remains authoritative. A narrow promise queue serializes report
+ * commands and account deletion for this user across D1 I/O.
  */
 export class FeedbackAllowance extends DurableObject<Env> {
   private commandQueue: Promise<void> = Promise.resolve();
@@ -37,15 +45,41 @@ export class FeedbackAllowance extends DurableObject<Env> {
   override async fetch(request: Request): Promise<Response> {
     if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: { allow: "POST" } });
     const pathname = new URL(request.url).pathname;
-    if (pathname !== "/submit" && pathname !== "/edit") return new Response("Not found", { status: 404 });
+    if (pathname !== "/submit" && pathname !== "/edit" && pathname !== "/delete") return new Response("Not found", { status: 404 });
     const isEdit = pathname === "/edit";
-    const parsed = (isEdit ? feedbackEditCommandSchema : allowanceCommandSchema).safeParse(await request.json().catch(() => null));
+    const isDelete = pathname === "/delete";
+    const schema = isDelete ? accountDeletionCommandSchema : isEdit ? feedbackEditCommandSchema : allowanceCommandSchema;
+    const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return new Response("Invalid allowance command", { status: 400 });
-    const command = this.commandQueue.then(() => isEdit
-      ? this.edit(parsed.data as FeedbackEditCommand)
-      : this.submit(parsed.data as AllowanceCommand));
+    const command = this.commandQueue.then(() => isDelete
+      ? this.deleteAccount(parsed.data as AccountDeletionCommand)
+      : isEdit
+        ? this.edit(parsed.data as FeedbackEditCommand)
+        : this.submit(parsed.data as AllowanceCommand));
     this.commandQueue = command.then(() => undefined, () => undefined);
     return command;
+  }
+
+  private async isAccountAvailable(userId: string): Promise<boolean> {
+    const profile = await this.bindings.DB.prepare(
+      "select github_user_id, status from user_profile where user_id = ? limit 1"
+    ).bind(userId).first<{ github_user_id: string; status: string }>();
+    if (!profile || (profile.status !== "active" && profile.status !== "admin")) return false;
+    return !(await hasDeletedGitHubIdentity(this.bindings, profile.github_user_id));
+  }
+
+  private async deleteAccount(command: AccountDeletionCommand): Promise<Response> {
+    const profile = await this.bindings.DB.prepare(
+      "select github_user_id, status from user_profile where user_id = ? limit 1"
+    ).bind(command.userId).first<{ github_user_id: string; status: string }>();
+    if (!profile || profile.status === "deleted") {
+      return json({ deleted: false, code: "account_unavailable" }, 409);
+    }
+    if (profile.status === "admin" || isConfiguredAdministratorGitHubId(this.bindings, profile.github_user_id)) {
+      return json({ deleted: false, code: "administrator_deletion_blocked" }, 409);
+    }
+    const { previousUsername } = await deleteOwnAccount(this.bindings, command.userId, command.now);
+    return json({ deleted: true, previousUsername });
   }
 
   private async allowanceFor(userId: string, now: number): Promise<FeedbackAllowanceState> {
@@ -64,6 +98,9 @@ export class FeedbackAllowance extends DurableObject<Env> {
 
   private async submit(command: AllowanceCommand): Promise<Response> {
     const { userId, now, report } = command;
+    if (!(await this.isAccountAvailable(userId))) {
+      return json({ accepted: false, idempotent: false, code: "account_unavailable", allowance: await this.allowanceFor(userId, now) }, 403);
+    }
     const existing = await this.bindings.DB.prepare(
       "select id from feedback_report where user_id = ? and idempotency_key = ? limit 1"
     ).bind(userId, report.idempotencyKey).first<{ id: string }>();
@@ -167,6 +204,9 @@ export class FeedbackAllowance extends DurableObject<Env> {
 
   private async edit(command: FeedbackEditCommand): Promise<Response> {
     const { userId, now, report } = command;
+    if (!(await this.isAccountAvailable(userId))) {
+      return json({ edited: false, code: "account_unavailable", allowance: await this.allowanceFor(userId, now) }, 403);
+    }
     const latest = await this.bindings.DB.prepare(
       `select id, submitted_at, edited_at, agent_item_id, result_quality_rating,
          usage_efficiency_rating, tags_json, short_comment

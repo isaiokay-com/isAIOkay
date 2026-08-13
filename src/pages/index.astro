@@ -42,6 +42,7 @@ const requestedItem = params.get("item");
 const selectedSlug = requestedItem && items.some((item) => item.slug === requestedItem) ? requestedItem : null;
 const requestedFeedback = params.get("feedback");
 const feedbackItem = requestedFeedback && payload.items.find((item) => item.slug === requestedFeedback) ? requestedFeedback : null;
+const accountDeleted = params.get("account") === "deleted";
 const pageTitle = HOME_PAGE_TITLE;
 const pageDescription = HOME_PAGE_DESCRIPTION;
 const pageUrl = "https://isaiokay.com/";
@@ -97,6 +98,7 @@ const structuredData = {
     <Header generatedAt={payload.generatedAt} />
     <main id="main-content">
       <Intro />
+      {accountDeleted && <section class="account-deleted-notice" role="status"><strong>Your account was deleted.</strong><span>Your identity and access data were removed. Minimal de-identified rating records remain for ranking integrity.</span></section>}
       <section id="cli" class="cli-band" aria-labelledby="cli-title">
         <div class="page-inner cli-inner">
           <div class="cli-copy">

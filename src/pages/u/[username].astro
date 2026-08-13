@@ -19,7 +19,8 @@ const profile = await getPublicProfileView(env, username, identity?.userId ?? nu
 if (!profile) Astro.response.status = 404;
 if (profile && username !== profile.username) return Astro.redirect(`/u/${encodeURIComponent(profile.username)}`, 301);
 
-const allowance = profile?.isOwner && identity ? await getFeedbackAllowance(env, identity.userId) : null;
+const canRate = identity?.profile.status === "active" || identity?.profile.status === "admin";
+const allowance = profile?.isOwner && identity && canRate ? await getFeedbackAllowance(env, identity.userId) : null;
 const allowanceLabel = allowance?.remaining === 2 ? "You have 2 ratings available" : allowance?.remaining === 1 ? "You have 1 rating available" : null;
 
 const renderedAt = Date.now();
@@ -96,7 +97,7 @@ const structuredData = profile?.isPublic ? {
               </a>}
             </div>
           </div>
-          {profile.isOwner && <div class="profile-edit-slot"><ProfileVisibilityControl client:load initialPublic={profile.isPublic} initialXUsername={profile.xUsername} /></div>}
+          {profile.isOwner && <div class="profile-edit-slot"><ProfileVisibilityControl client:load initialPublic={profile.isPublic} initialXUsername={profile.xUsername} username={profile.username} /></div>}
         </div>
         <dl class="profile-stats-strip" aria-label="Profile rating summary">
           <div>

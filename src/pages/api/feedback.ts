@@ -60,6 +60,7 @@ export const GET: APIRoute = async (context) => {
 };
 
 const editErrorMessages: Record<string, string> = {
+  account_unavailable: "This account is no longer available.",
   edit_not_latest: "Only your latest rating can be edited.",
   edit_expired: "The 10-minute edit window has expired.",
   edit_already_used: "This rating has already used its one edit."

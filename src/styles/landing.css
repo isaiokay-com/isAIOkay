@@ -2040,6 +2040,26 @@ body {
   letter-spacing: -0.03em;
 }
 
+.landing-page .account-deleted-notice {
+  display: flex;
+  width: min(calc(100% - 2rem), var(--layout-content-max));
+  align-items: baseline;
+  gap: var(--space-sm);
+  margin: var(--space-md) auto 0;
+  padding: var(--space-sm) var(--space-md);
+  border: var(--rule-thin) solid var(--color-rule-strong);
+  border-radius: var(--radius-control);
+  background: var(--color-paper-2);
+  color: var(--color-neutral);
+  font-size: var(--text-sm);
+}
+
+.landing-page .account-deleted-notice strong { color: var(--color-ink); }
+
+@media (max-width: 37rem) {
+  .landing-page .account-deleted-notice { align-items: start; flex-direction: column; }
+}
+
 .landing-page .feedback-dialog-close {
   min-height: 2.75rem;
   padding: var(--space-2xs) var(--space-sm);

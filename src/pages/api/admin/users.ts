@@ -7,7 +7,7 @@ import { getRuntimeEnv } from "../../../lib/runtime";
 import { requireAdministrator } from "../../../services/auth";
 
 export const prerender = false;
-const schema = z.object({ userId: z.uuid(), status: z.enum(["active", "suspended", "admin", "deleted"]) }).strict();
+const schema = z.object({ userId: z.uuid(), status: z.enum(["active", "suspended", "admin"]) }).strict();
 
 export const PATCH: APIRoute = async (context) => {
   try {

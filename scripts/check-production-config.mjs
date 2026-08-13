@@ -41,6 +41,9 @@ try {
   if (requiredSecrets.has("TURNSTILE_SITE_KEY")) {
     throw new Error("TURNSTILE_SITE_KEY must not be deployed as a secret.");
   }
+  if (!requiredSecrets.has("DELETED_IDENTITY_SECRET")) {
+    throw new Error("DELETED_IDENTITY_SECRET must be deployed as a Worker secret.");
+  }
   if (config.vars?.TURNSTILE_SITE_KEY !== turnstileSiteKey) {
     throw new Error("TURNSTILE_SITE_KEY was not injected into Worker vars.");
   }

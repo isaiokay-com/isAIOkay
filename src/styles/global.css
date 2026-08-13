@@ -356,6 +356,23 @@ a:focus-visible, button:focus-visible, select:focus-visible, summary:focus-visib
 .profile-public-setting input { width: 1.25rem; height: 1.25rem; flex: 0 0 auto; accent-color: var(--color-accent); }
 .profile-public-setting input:disabled,
 .profile-x-input input:disabled { cursor: not-allowed; opacity: .55; }
+.profile-danger-zone { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); padding: var(--space-md); border: 1px solid color-mix(in srgb, var(--color-error) 32%, var(--color-rule)); border-radius: var(--radius-control); background: color-mix(in srgb, var(--color-error) 4%, var(--color-paper)); }
+.profile-danger-zone > div { display: grid; gap: var(--space-2xs); }
+.profile-danger-zone strong { color: var(--color-ink); font-size: var(--text-sm); }
+.profile-danger-zone p { margin: 0; color: var(--color-neutral); font-size: var(--text-xs); line-height: 1.45; }
+.profile-danger-zone button,
+.profile-delete-submit { min-height: 2.75rem; padding: var(--space-xs) var(--space-md); border: 1px solid var(--color-error); border-radius: var(--radius-control); background: var(--color-paper); color: var(--color-error); font: inherit; font-size: var(--text-sm); font-weight: 700; cursor: pointer; white-space: nowrap; }
+.profile-delete-confirmation { display: grid; gap: var(--space-md); }
+.profile-delete-warning { display: grid; gap: var(--space-sm); padding: var(--space-md); border-inline-start: .25rem solid var(--color-error); background: color-mix(in srgb, var(--color-error) 5%, var(--color-paper)); }
+.profile-delete-warning strong { color: var(--color-error); }
+.profile-delete-warning p { margin: 0; color: var(--color-neutral); font-size: var(--text-sm); line-height: 1.55; }
+.profile-delete-confirmation > label { color: var(--color-ink); font-size: var(--text-sm); }
+.profile-delete-confirmation > input { min-height: 2.75rem; padding: var(--space-xs) var(--space-sm); border: 1px solid var(--color-rule-strong); border-radius: var(--radius-control); outline: 2px solid transparent; outline-offset: 1px; background: var(--color-paper); color: var(--color-ink); }
+.profile-delete-confirmation > input:focus-visible { border-color: var(--color-error); outline-color: color-mix(in srgb, var(--color-error) 30%, transparent); }
+.profile-delete-confirmation > input[aria-invalid="true"] { border-color: var(--color-error); }
+.profile-delete-confirmation > .profile-settings-error { margin: calc(-1 * var(--space-sm)) 0 0; color: var(--color-error); font-size: var(--text-xs); }
+.profile-danger-zone button:disabled,
+.profile-delete-submit:disabled { cursor: not-allowed; opacity: .5; }
 .profile-settings-actions { display: flex; justify-content: end; gap: var(--space-sm); }
 .profile-settings-actions .button-dark,
 .profile-settings-actions .button-light { min-height: 2.75rem; border-radius: var(--radius-control); white-space: nowrap; }
@@ -370,6 +387,8 @@ a:focus-visible, button:focus-visible, select:focus-visible, summary:focus-visib
   .profile-model-list a:hover strong,
   .profile-report-model a:hover { color: var(--color-accent); }
   .profile-x-input:hover { background: var(--color-paper-2); }
+  .profile-danger-zone button:hover,
+  .profile-delete-submit:hover:not(:disabled) { background: var(--color-error); color: white; }
   .profile-community-primary:hover { background: transparent; color: var(--color-on-dark); transform: translateY(-1px); }
   .profile-community-actions > a:hover { color: white; text-decoration-color: currentColor; }
 }
@@ -380,6 +399,7 @@ a:focus-visible, button:focus-visible, select:focus-visible, summary:focus-visib
 @media (max-width: 34.9rem) {
   .profile-edit-slot { position: static; margin-block-start: var(--space-md); }
   .profile-identity { padding-inline-end: 0; }
+  .profile-danger-zone { align-items: stretch; flex-direction: column; }
 }
 
 @media (min-width: 35rem) {

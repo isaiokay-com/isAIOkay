@@ -556,3 +556,34 @@ test("a suspicious CLI user completes browser verification and submits with the 
   expect(submitted.status).toBe(201);
   expect(submitted.body.accepted).toBe(true);
 });
+
+test("an account owner can permanently remove their account", async ({ page }) => {
+  await page.goto("/");
+  await signInAs(page, "blocked");
+  await page.goto("/u/very-new-dev");
+  await page.getByRole("button", { name: "Edit profile" }).click();
+  const settings = page.getByRole("dialog", { name: "Profile settings" });
+  await settings.getByRole("button", { name: "Delete account" }).click();
+  const deletionDialog = page.getByRole("dialog", { name: "Delete account" });
+  await expect(deletionDialog).toBeVisible();
+  const confirmation = deletionDialog.getByLabel(/Type very-new-dev to confirm/);
+  const submit = deletionDialog.getByRole("button", { name: "Delete my account" });
+  await expect(submit).toBeDisabled();
+  await confirmation.fill("very-new");
+  await expect(submit).toBeDisabled();
+  await confirmation.fill("very-new-dev");
+  await submit.click();
+  await expect(page).toHaveURL(/\?account=deleted/);
+  await expect(page.getByRole("status")).toContainText("Your account was deleted.");
+  await page.goto("/u/very-new-dev");
+  await expect(page.getByRole("heading", { name: "This profile is private" })).toBeVisible();
+  const reRegistration = await page.evaluate(async () => {
+    const response = await fetch("/api/dev/mock-github", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ identity: "blocked" })
+    });
+    return { status: response.status, body: await response.json() as { error?: { code?: string } } };
+  });
+  expect(reRegistration).toMatchObject({ status: 403, body: { error: { code: "account_deleted" } } });
+});

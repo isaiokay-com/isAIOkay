@@ -9,6 +9,8 @@ export interface Env {
   ALLOWANCE_RATE_LIMIT: RateLimitBinding;
   ADMIN_RATE_LIMIT: RateLimitBinding;
   BETTER_AUTH_SECRET: string;
+  /** Stable anti-re-registration pepper. Unlike auth secrets, this must never rotate. */
+  DELETED_IDENTITY_SECRET: string;
   BETTER_AUTH_URL: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;

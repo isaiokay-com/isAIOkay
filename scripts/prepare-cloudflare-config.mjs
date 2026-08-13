@@ -60,7 +60,7 @@ replaceOnce(
 );
 replaceOnce(
   '  "vars": {',
-  '  "secrets": {\n    "required": [\n      "BETTER_AUTH_SECRET",\n      "GITHUB_CLIENT_ID",\n      "GITHUB_CLIENT_SECRET",\n      "TURNSTILE_SECRET_KEY",\n      "ADMIN_GITHUB_USER_IDS"\n    ]\n  },\n  "vars": {',
+  '  "secrets": {\n    "required": [\n      "BETTER_AUTH_SECRET",\n      "DELETED_IDENTITY_SECRET",\n      "GITHUB_CLIENT_ID",\n      "GITHUB_CLIENT_SECRET",\n      "TURNSTILE_SECRET_KEY",\n      "ADMIN_GITHUB_USER_IDS"\n    ]\n  },\n  "vars": {',
 );
 replaceOnce(
   '"BETTER_AUTH_URL": "http://localhost:8787"',

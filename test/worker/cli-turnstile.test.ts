@@ -52,6 +52,17 @@ describe("CLI browser Turnstile handoff", () => {
     expect(row).not.toHaveProperty("payload");
   });
 
+  it("does not recreate a challenge after an authenticated account becomes unavailable", async () => {
+    const identity = await createCliIdentity();
+    await runtime.DB.prepare("update user_profile set status = 'deleted' where user_id = ?").bind(identity.userId).run();
+
+    await expect(issueCliTurnstileChallenge(runtime, identity, now))
+      .rejects.toMatchObject({ status: 403, code: "account_unavailable" });
+    const count = await runtime.DB.prepare("select count(*) as count from cli_turnstile_challenge where user_id = ?")
+      .bind(identity.userId).first<{ count: number }>();
+    expect(count?.count).toBe(0);
+  });
+
   it("returns a proof to the same CLI after browser verification and consumes it once", async () => {
     const identity = await createCliIdentity();
     const challenge = await issueCliTurnstileChallenge(runtime, identity, now);

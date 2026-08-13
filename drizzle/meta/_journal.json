@@ -92,6 +92,13 @@
       "when": 1786540016321,
       "tag": "0012_closed_gunslinger",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1786591403130,
+      "tag": "0013_colossal_scorpion",
+      "breakpoints": true
     }
   ]
 }

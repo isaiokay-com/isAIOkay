@@ -99,7 +99,7 @@ export const issueCliTurnstileChallenge = async (
   await expireChallenges(env, now);
   const id = crypto.randomUUID();
   const expiresAt = now + CHALLENGE_TTL_MS;
-  await env.DB.batch([
+  const [, inserted] = await env.DB.batch([
     env.DB.prepare(
       `update cli_turnstile_challenge
        set status = 'expired'
@@ -108,9 +108,13 @@ export const issueCliTurnstileChallenge = async (
     env.DB.prepare(
       `insert into cli_turnstile_challenge
        (id, user_id, installation_id, status, requires_turnstile, created_at, expires_at, verified_at, consumed_at)
-       values (?, ?, ?, 'pending', 1, ?, ?, null, null)`
-    ).bind(id, identity.userId, identity.installationId, now, expiresAt)
+       select ?, ?, ?, 'pending', 1, ?, ?, null, null
+       from user_profile where user_id = ? and status in ('active', 'admin')`
+    ).bind(id, identity.userId, identity.installationId, now, expiresAt, identity.userId)
   ]);
+  if ((inserted?.meta.changes ?? 0) !== 1) {
+    throw new HttpError(403, "account_unavailable", "This account cannot submit feedback.");
+  }
   return {
     id,
     status: "pending",

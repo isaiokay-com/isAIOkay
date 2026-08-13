@@ -1,8 +1,9 @@
 import { betterAuth } from "better-auth";
 import type { Env } from "../env";
-import { ensureProfile, getGithubAccountId, getProfile, type ProfileRecord } from "../db/repositories";
+import { ensureProfile, getGithubAccountId, getProfile, hasDeletedGitHubIdentity, type ProfileRecord } from "../db/repositories";
 import { HttpError, getCookie, isLocalDevelopmentRequest } from "../lib/http";
 import { isGitHubUsername, isSafeHttpsUrl } from "../lib/security";
+import { isConfiguredAdministratorGitHubId } from "../lib/administration";
 
 export const DEVELOPMENT_USER_COOKIE = "is_ai_okay_dev_user";
 
@@ -14,7 +15,18 @@ interface GitHubUserResponse {
   created_at?: string;
 }
 
-export const getMinimalGitHubUserInfo = async (accessToken: string | undefined) => {
+const githubUserIdFromSyntheticEmail = (email: unknown): string | null => {
+  if (typeof email !== "string") return null;
+  return /^github-([1-9][0-9]*)@isaiokay\.invalid$/.exec(email.toLowerCase())?.[1] ?? null;
+};
+
+const assertGitHubIdentityNotDeleted = async (env: Env, githubUserId: string): Promise<void> => {
+  if (await hasDeletedGitHubIdentity(env, githubUserId)) {
+    throw new Error("This GitHub identity belongs to a deleted account");
+  }
+};
+
+export const getMinimalGitHubUserInfo = async (accessToken: string | undefined, env?: Env) => {
   if (!accessToken) return null;
   let response: Response;
   try {
@@ -58,6 +70,10 @@ export const getMinimalGitHubUserInfo = async (accessToken: string | undefined) 
     });
     return null;
   }
+  if (env && await hasDeletedGitHubIdentity(env, githubUserId)) {
+    console.warn("Rejected sign-in for a previously deleted GitHub identity");
+    return null;
+  }
   const name = typeof profile.name === "string" && profile.name.trim() ? profile.name.trim().slice(0, 100) : githubUsername;
   const image = typeof profile.avatar_url === "string" && isSafeHttpsUrl(profile.avatar_url) ? profile.avatar_url : undefined;
   return {
@@ -82,6 +98,37 @@ export const createAuth = (env: Env) => {
     basePath: "/api/auth",
     secret: env.BETTER_AUTH_SECRET,
     database: env.DB,
+    databaseHooks: {
+      user: {
+        create: {
+          before: async (user) => {
+            const githubUserId = githubUserIdFromSyntheticEmail(user.email);
+            if (githubUserId) await assertGitHubIdentityNotDeleted(env, githubUserId);
+          }
+        },
+        update: {
+          before: async (user) => {
+            const githubUserId = githubUserIdFromSyntheticEmail(user.email);
+            if (githubUserId) await assertGitHubIdentityNotDeleted(env, githubUserId);
+          }
+        }
+      },
+      account: {
+        create: {
+          before: async (account) => {
+            if (account.providerId === "github") await assertGitHubIdentityNotDeleted(env, account.accountId);
+          }
+        }
+      },
+      session: {
+        create: {
+          before: async (session) => {
+            const profile = await getProfile(env, session.userId);
+            if (profile?.status === "deleted") throw new Error("This account is deleted");
+          }
+        }
+      }
+    },
     trustedOrigins: [env.BETTER_AUTH_URL],
     useSecureCookies: env.BETTER_AUTH_URL.startsWith("https://"),
     defaultCookieAttributes: {
@@ -114,7 +161,7 @@ export const createAuth = (env: Env) => {
         // An empty scope grants public-profile access only. The custom mapper
         // performs exactly one /user request and never requests email or repos.
         disableDefaultScope: true,
-        getUserInfo: (token) => getMinimalGitHubUserInfo(token.accessToken),
+        getUserInfo: (token) => getMinimalGitHubUserInfo(token.accessToken, env),
         overrideUserInfoOnSignIn: true
       }
     } : {}
@@ -154,6 +201,9 @@ export const getCurrentIdentity = async (request: Request, env: Env): Promise<Cu
   if (!githubUserId || !session.user.githubUsername || !session.user.githubAccountCreatedAt) {
     throw new HttpError(503, "github_identity_incomplete", "GitHub identity details could not be loaded. Please sign out and try again.");
   }
+  if (await hasDeletedGitHubIdentity(env, githubUserId)) {
+    throw new HttpError(403, "account_deleted", "This GitHub account was previously deleted and cannot be registered again.");
+  }
   const profile = await ensureProfile({
     env,
     userId: session.user.id,
@@ -175,10 +225,13 @@ export const requireIdentity = async (request: Request, env: Env): Promise<Curre
   return identity;
 };
 
+export const isAdministratorIdentity = (identity: CurrentIdentity, env: Env): boolean => {
+  return identity.profile.status === "admin" || isConfiguredAdministratorGitHubId(env, identity.profile.githubUserId);
+};
+
 export const requireAdministrator = async (request: Request, env: Env): Promise<CurrentIdentity> => {
   const identity = await requireIdentity(request, env);
-  const configuredIds = new Set((env.ADMIN_GITHUB_USER_IDS ?? "").split(",").map((value) => value.trim()).filter(Boolean));
-  if (identity.profile.status !== "admin" && !configuredIds.has(identity.profile.githubUserId)) {
+  if (!isAdministratorIdentity(identity, env)) {
     throw new HttpError(403, "administrator_required", "Administrator access is required.");
   }
   return identity;

@@ -86,8 +86,12 @@ export const approveDeviceAuthorization = async (
   if (record.status !== "pending") throw new HttpError(409, "device_code_unavailable", "That device code has already been used.");
   const outcome = await env.DB.prepare(
     `update cli_device_authorization set status = 'approved', user_id = ?, approved_at = ?
-     where id = ? and status = 'pending' and expires_at > ?`
-  ).bind(identity.userId, now, record.id, now).run();
+     where id = ? and status = 'pending' and expires_at > ?
+       and exists (
+         select 1 from user_profile
+         where user_id = ? and status in ('active', 'admin')
+       )`
+  ).bind(identity.userId, now, record.id, now, identity.userId).run();
   if (!outcome.meta.changes) throw new HttpError(409, "device_code_unavailable", "That device code has already been used.");
   return { clientName: record.client_name };
 };
@@ -120,9 +124,10 @@ export const exchangeDeviceAuthorization = async (
     env.DB.prepare(
       `insert into cli_installation
         (id, user_id, label, token_hash, scopes_json, created_at, last_used_at, expires_at, revoked_at)
-       values (?, ?, ?, ?, '["allowance:read","feedback:write"]', ?, null, ?, null)
+       select ?, ?, ?, ?, '["allowance:read","feedback:write"]', ?, null, ?, null
+       from user_profile where user_id = ? and status in ('active', 'admin')
        on conflict(id) do nothing`
-    ).bind(record.id, record.user_id, record.client_name, tokenHash, now, installationExpiresAt),
+    ).bind(record.id, record.user_id, record.client_name, tokenHash, now, installationExpiresAt, record.user_id),
     env.DB.prepare(
       `update cli_device_authorization set status = 'consumed', consumed_at = coalesce(consumed_at, ?)
        where id = ? and status in ('approved', 'consumed')`

@@ -84,6 +84,7 @@ wrangler d1 execute is-ai-okay --remote --file=./scripts/bootstrap-production.sq
 
 # secrets (GitHub automation uploads the same names from environment secrets)
 wrangler secret put BETTER_AUTH_SECRET
+wrangler secret put DELETED_IDENTITY_SECRET
 wrangler secret put GITHUB_CLIENT_ID
 wrangler secret put GITHUB_CLIENT_SECRET
 wrangler secret put TURNSTILE_SECRET_KEY
@@ -101,6 +102,7 @@ npm run deploy
 - Configure `BETTER_AUTH_URL` to the final HTTPS origin and add the exact GitHub callback URL.
 - Set the Turnstile site key and secret for the same hostname.
 - Restrict `ADMIN_GITHUB_USER_IDS` to stable numeric GitHub IDs or set administrator status through a controlled migration.
+- Generate `DELETED_IDENTITY_SECRET` independently from the authentication secret and preserve it permanently. Rotating it would invalidate deleted-account re-registration blocks.
 - Ensure the Durable Object `v1` migration is deployed before accepting reports.
 - Confirm the Cron Trigger is shown in the Cloudflare dashboard.
 - Keep both release-enable repository variables disabled while rotating credentials or changing production bindings.

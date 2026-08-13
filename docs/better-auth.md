@@ -16,6 +16,7 @@ Create a GitHub OAuth App and configure:
 - production callback: `https://isaiokay.com/api/auth/callback/github`;
 - `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` as Worker secrets;
 - `BETTER_AUTH_SECRET` as a random secret of at least 32 characters;
+- `DELETED_IDENTITY_SECRET` as a separate random secret of at least 32 characters that is preserved permanently and never rotated;
 - `BETTER_AUTH_URL=https://isaiokay.com` as the canonical production URL.
 
 The provider disables Better Auth’s default `read:user` and `user:email` scopes. GitHub OAuth without requested scopes exposes only public profile information. A custom mapper makes exactly one `GET https://api.github.com/user` request during sign-in and never calls the email or repository APIs.
