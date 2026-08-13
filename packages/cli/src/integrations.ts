@@ -1,5 +1,6 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { chmod, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import { atomicWriteJson, pathExists } from "./storage.js";
 import type { Provider } from "./types.js";
 
@@ -25,7 +26,18 @@ const readObject = async (path: string): Promise<Record<string, unknown>> => {
 };
 
 const hookMarker = (provider: Provider): string => `isaiokay hook --provider ${provider}`;
-const hookCommand = (provider: Provider, executable: string): string => `${executable} hook --provider ${provider} --quiet`;
+const hookCommand = (provider: Provider, executable: string, silent = false): string =>
+  `${executable} hook --provider ${provider} --${silent ? "silent" : "quiet"}`;
+
+export const resolveGrokHome = (home: string, env: NodeJS.ProcessEnv): string => {
+  const configured = env.GROK_HOME?.trim();
+  return configured ? resolve(configured) : join(home, ".grok");
+};
+
+export const resolveKimiHome = (home: string, env: NodeJS.ProcessEnv): string => {
+  const configured = env.KIMI_CODE_HOME?.trim();
+  return configured ? resolve(configured) : join(home, ".kimi-code");
+};
 
 const mergeCursorHooks = async (
   path: string,
@@ -53,7 +65,7 @@ const mergeCursorHooks = async (
 
 const mergeClaudeCompatibleHooks = async (
   path: string,
-  provider: "codex" | "claude",
+  provider: "codex" | "claude" | "qwen",
   executable: string,
   remove: boolean
 ): Promise<void> => {
@@ -72,7 +84,11 @@ const mergeClaudeCompatibleHooks = async (
       return handlers.length > 0 ? [{ ...group, hooks: handlers }] : [];
     });
     if (!remove) filtered.push({
-      hooks: [{ type: "command", command: hookCommand(provider, executable), timeout: event === "SessionEnd" ? 3 : 2 }]
+      hooks: [{
+        type: "command",
+        command: hookCommand(provider, executable),
+        timeout: provider === "qwen" ? (event === "SessionEnd" ? 3_000 : 2_000) : (event === "SessionEnd" ? 3 : 2)
+      }]
     });
     if (filtered.length > 0) nextHooks[event] = filtered;
     else delete nextHooks[event];
@@ -80,6 +96,96 @@ const mergeClaudeCompatibleHooks = async (
   const next: Record<string, unknown> = { ...root, hooks: nextHooks };
   if (Object.keys(nextHooks).length === 0 && !Object.prototype.hasOwnProperty.call(root, "hooks")) delete next.hooks;
   await atomicWriteJson(path, next);
+};
+
+const KIMI_START_MARKER = "# >>> isaiokay lifecycle hooks >>>";
+const KIMI_END_MARKER = "# <<< isaiokay lifecycle hooks <<<";
+const KIMI_PREFIX_METADATA = "# isaiokay-prefixed-newline = ";
+
+const kimiHookBlock = (executable: string, prefixedNewline: boolean, newline: string): string => [
+  KIMI_START_MARKER,
+  `${KIMI_PREFIX_METADATA}${prefixedNewline ? "true" : "false"}`,
+  "[[hooks]]",
+  'event = "SessionStart"',
+  `command = ${JSON.stringify(hookCommand("kimi", executable, true))}`,
+  "timeout = 2",
+  "",
+  "[[hooks]]",
+  'event = "Stop"',
+  `command = ${JSON.stringify(hookCommand("kimi", executable, true))}`,
+  "timeout = 2",
+  "",
+  "[[hooks]]",
+  'event = "SessionEnd"',
+  `command = ${JSON.stringify(hookCommand("kimi", executable, true))}`,
+  "timeout = 2",
+  KIMI_END_MARKER
+].join(newline);
+
+const markerCount = (source: string, marker: string): number => source.split(marker).length - 1;
+
+const atomicWriteProviderText = async (file: string, text: string): Promise<void> => {
+  const info = await lstat(file).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  const target = info?.isSymbolicLink() ? await realpath(file) : file;
+  const directory = dirname(target);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const existing = await stat(target).catch(() => null);
+  const mode = existing ? existing.mode & 0o777 : 0o600;
+  const temporary = join(directory, `.${basename(target)}.${randomUUID()}.tmp`);
+  try {
+    await writeFile(temporary, text, { encoding: "utf8", mode, flag: "wx" });
+    await rename(temporary, target);
+    await chmod(target, mode).catch(() => undefined);
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined);
+  }
+};
+
+const mergeKimiHooks = async (path: string, executable: string, remove: boolean): Promise<void> => {
+  if (remove && !(await pathExists(path))) return;
+  let source = "";
+  try {
+    source = await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const starts = markerCount(source, KIMI_START_MARKER);
+  const ends = markerCount(source, KIMI_END_MARKER);
+  if (starts !== ends || starts > 1) {
+    throw new Error(`Refusing to edit malformed IsAIokay.com hook markers at ${path}.`);
+  }
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  if (starts === 1) {
+    const start = source.indexOf(KIMI_START_MARKER);
+    const endMarker = source.indexOf(KIMI_END_MARKER, start + KIMI_START_MARKER.length);
+    if (endMarker === -1) {
+      throw new Error(`Refusing to edit malformed IsAIokay.com hook markers at ${path}.`);
+    }
+    const end = endMarker + KIMI_END_MARKER.length;
+    const owned = source.slice(start, end);
+    const metadata = owned.match(/^# isaiokay-prefixed-newline = (true|false)\r?$/mu)?.[1];
+    if (metadata === undefined) {
+      throw new Error(`Refusing to edit malformed IsAIokay.com hook metadata at ${path}.`);
+    }
+    if (!remove) {
+      const next = `${source.slice(0, start)}${kimiHookBlock(executable, metadata === "true", newline)}${source.slice(end)}`;
+      if (next !== source) await atomicWriteProviderText(path, next);
+      return;
+    }
+    let before = source.slice(0, start);
+    if (metadata === "true" && before.endsWith(newline)) before = before.slice(0, -newline.length);
+    const afterMarker = source.slice(end);
+    const after = afterMarker.startsWith(newline) ? afterMarker.slice(newline.length) : afterMarker;
+    const next = `${before}${after}`;
+    if (next !== source) await atomicWriteProviderText(path, next);
+    return;
+  }
+  if (remove) return;
+  const prefixedNewline = source.length > 0 && !source.endsWith("\n");
+  await atomicWriteProviderText(path, `${source}${prefixedNewline ? newline : ""}${kimiHookBlock(executable, prefixedNewline, newline)}${newline}`);
 };
 
 const mergeGeminiHooks = async (
@@ -222,14 +328,22 @@ export default function IsAiOkay(amp: PluginAPI) {
 export const installOwnedIntegration = async (
   provider: Provider,
   home: string,
-  executable = "isaiokay"
+  executable = "isaiokay",
+  env: NodeJS.ProcessEnv = {}
 ): Promise<IntegrationResult> => {
-  if (provider === "codex" || provider === "claude") {
+  if (provider === "codex" || provider === "claude" || provider === "qwen") {
     const path = provider === "codex"
       ? join(home, ".codex", "hooks.json")
-      : join(home, ".claude", "settings.json");
+      : provider === "claude"
+        ? join(home, ".claude", "settings.json")
+        : join(home, ".qwen", "settings.json");
     await mergeClaudeCompatibleHooks(path, provider, executable, false);
     return { provider, mode: "installed", path, message: "Lifecycle hooks installed. Review and trust them in the host tool when prompted." };
+  }
+  if (provider === "kimi") {
+    const path = join(resolveKimiHome(home, env), "config.toml");
+    await mergeKimiHooks(path, executable, false);
+    return { provider, mode: "installed", path, message: "Kimi Code lifecycle hooks were added without changing existing TOML settings. The documented start model is preselected but remains confirmable." };
   }
   if (provider === "cursor") {
     const path = join(home, ".cursor", "hooks.json");
@@ -265,7 +379,7 @@ export const installOwnedIntegration = async (
     return { provider, mode: "installed", path, message: "An isolated Amp agent.end plugin was installed. Reload Amp plugins if Amp is already open." };
   }
   if (provider === "grok") {
-    const path = join(home, ".grok", "hooks", "isaiokay.json");
+    const path = join(resolveGrokHome(home, env), "hooks", "isaiokay.json");
     await atomicWriteJson(path, {
       hooks: {
         SessionStart: [{ hooks: [{ type: "command", command: hookCommand(provider, executable), timeout: 2 }] }],
@@ -284,14 +398,22 @@ export const installOwnedIntegration = async (
 
 export const uninstallOwnedIntegration = async (
   provider: Provider,
-  home: string
+  home: string,
+  env: NodeJS.ProcessEnv = {}
 ): Promise<IntegrationResult> => {
-  if (provider === "codex" || provider === "claude") {
+  if (provider === "codex" || provider === "claude" || provider === "qwen") {
     const path = provider === "codex"
       ? join(home, ".codex", "hooks.json")
-      : join(home, ".claude", "settings.json");
+      : provider === "claude"
+        ? join(home, ".claude", "settings.json")
+        : join(home, ".qwen", "settings.json");
     await mergeClaudeCompatibleHooks(path, provider, "isaiokay", true);
     return { provider, mode: "installed", path, message: "Only IsAIokay.com hook handlers were removed." };
+  }
+  if (provider === "kimi") {
+    const path = join(resolveKimiHome(home, env), "config.toml");
+    await mergeKimiHooks(path, "isaiokay", true);
+    return { provider, mode: "installed", path, message: "Only the owned IsAIokay.com Kimi hook block was removed." };
   }
   if (provider === "cursor") {
     const path = join(home, ".cursor", "hooks.json");
@@ -319,7 +441,7 @@ export const uninstallOwnedIntegration = async (
     return { provider, mode: "installed", path, message: "The isolated Amp plugin was removed." };
   }
   if (provider === "grok") {
-    const path = join(home, ".grok", "hooks", "isaiokay.json");
+    const path = join(resolveGrokHome(home, env), "hooks", "isaiokay.json");
     await rm(path, { force: true });
     return { provider, mode: "installed", path, message: "The isolated Grok Build hook file was removed." };
   }

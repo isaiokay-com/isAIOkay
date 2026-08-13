@@ -55,6 +55,21 @@ const pendingSessionsToday = (state: LocalState, now: number): StoredEvent[][] =
   return groupedSessions(pendingEvents(state).filter((event) => localDayKey(event.occurredAt) === today));
 };
 
+const COMPLETION_ATTRIBUTIONS = new Set<StoredEvent["attribution"]>([
+  "active_model",
+  "session_end_unknown",
+  "task_complete",
+  "agent_end",
+  "turn_complete",
+  "turn_model",
+  "manual"
+]);
+
+const completedSessionsToday = (state: LocalState, now: number): StoredEvent[][] =>
+  pendingSessionsToday(state, now).filter((events) =>
+    events.length >= 2 && events.some((event) => COMPLETION_ATTRIBUTIONS.has(event.attribution))
+  );
+
 export const recordedSessionCount = (state: LocalState): number => groupedSessions(state.events).length;
 
 export const pendingSessionCount = (state: LocalState): number => groupedSessions(pendingEvents(state)).length;
@@ -80,7 +95,7 @@ export const decidePrompt = (state: LocalState, now = Date.now(), surface: Promp
     return { eligible: false, reason: "daily_cap", eventId: null };
   }
 
-  const sessions = pendingSessionsToday(state, now);
+  const sessions = completedSessionsToday(state, now);
   const terminalEvent = sessions[0]?.at(-1) ?? null;
   if (!terminalEvent || experiencedMilliseconds(sessions) < MINIMUM_DAILY_EXPERIENCE_MS) {
     return { eligible: false, reason: "no_meaningful_experience", eventId: null };
@@ -91,7 +106,7 @@ export const decidePrompt = (state: LocalState, now = Date.now(), surface: Promp
 export const reminderStatus = (state: LocalState, now = Date.now()): ReminderStatus => {
   const decision = decidePrompt(state, now);
   const experiencedMs = experiencedToday(state, now);
-  const rateableSessions = pendingSessionsToday(state, now);
+  const rateableSessions = completedSessionsToday(state, now);
   const rateableExperiencedMs = experiencedMilliseconds(rateableSessions);
   return {
     ...decision,

@@ -12,6 +12,8 @@ export const cliToolSchema = z.enum([
   "cline",
   "amp",
   "grok-build",
+  "qwen-code",
+  "kimi-code",
   "muse-code",
   "other"
 ]);
@@ -99,6 +101,8 @@ export const toolFallbackSlug = (tool: CliTool): string | null => ({
   cline: "cline",
   amp: "amp",
   "grok-build": "grok-build",
+  "qwen-code": "qwen-code",
+  "kimi-code": "kimi-code",
   "muse-code": "muse-code",
   other: null
 })[tool];

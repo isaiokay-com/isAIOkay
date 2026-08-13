@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -158,6 +158,124 @@ test("Grok Build uses an isolated lifecycle hook file", async (context) => {
   assert.match(contents, /isaiokay hook --provider grok --quiet/);
   await uninstallOwnedIntegration("grok", home);
   await assert.rejects(readFile(installed.path!, "utf8"), /ENOENT/);
+});
+
+test("Grok Build installation honors GROK_HOME", async (context) => {
+  const home = await mkdtemp(join(tmpdir(), "isaiokay-integrations-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const configuredHome = join(home, "custom-grok-home");
+  const installed = await installOwnedIntegration("grok", home, "isaiokay", { GROK_HOME: configuredHome });
+  assert.equal(installed.path, join(configuredHome, "hooks", "isaiokay.json"));
+  assert.match(await readFile(installed.path!, "utf8"), /isaiokay hook --provider grok --quiet/);
+  await assert.rejects(readFile(join(home, ".grok", "hooks", "isaiokay.json"), "utf8"), /ENOENT/);
+
+  await uninstallOwnedIntegration("grok", home, { GROK_HOME: configuredHome });
+  await assert.rejects(readFile(installed.path!, "utf8"), /ENOENT/);
+});
+
+test("Qwen Code preserves existing settings and uses millisecond lifecycle-hook timeouts", async (context) => {
+  const home = await mkdtemp(join(tmpdir(), "isaiokay-integrations-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const path = join(home, ".qwen", "settings.json");
+  await atomicWriteJson(path, {
+    theme: "user-theme",
+    hooks: { Stop: [{ hooks: [{ type: "command", command: "existing-qwen-stop" }] }] }
+  });
+
+  await installOwnedIntegration("qwen", home);
+  const installed = JSON.parse(await readFile(path, "utf8")) as { theme: string; hooks: Record<string, Array<{ hooks: Array<{ command: string; timeout?: number }> }>> };
+  assert.equal(installed.theme, "user-theme");
+  assert.match(JSON.stringify(installed), /existing-qwen-stop/);
+  assert.equal(installed.hooks.SessionStart?.at(-1)?.hooks[0]?.timeout, 2_000);
+  assert.equal(installed.hooks.SessionEnd?.at(-1)?.hooks[0]?.timeout, 3_000);
+  assert.match(JSON.stringify(installed), /isaiokay hook --provider qwen --quiet/);
+
+  await uninstallOwnedIntegration("qwen", home);
+  const uninstalled = await readFile(path, "utf8");
+  assert.match(uninstalled, /user-theme/);
+  assert.match(uninstalled, /existing-qwen-stop/);
+  assert.doesNotMatch(uninstalled, /isaiokay hook/);
+});
+
+test("Kimi Code preserves TOML settings and removes only its idempotent owned block", async (context) => {
+  const home = await mkdtemp(join(tmpdir(), "isaiokay-integrations-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const path = join(home, ".kimi-code", "config.toml");
+  const original = 'default_model = "kimi-k3"\n\n[[hooks]]\nevent = "Notification"\ncommand = "existing-command"\n';
+  await mkdir(join(home, ".kimi-code"), { recursive: true });
+  await writeFile(path, original, "utf8");
+
+  const installed = await installOwnedIntegration("kimi", home);
+  assert.equal(installed.path, path);
+  const first = await readFile(path, "utf8");
+  assert.match(first, /default_model = "kimi-k3"/);
+  assert.match(first, /existing-command/);
+  assert.match(first, /event = "SessionStart"/);
+  assert.match(first, /event = "Stop"/);
+  assert.match(first, /event = "SessionEnd"/);
+  assert.match(first, /isaiokay hook --provider kimi --silent/);
+
+  await installOwnedIntegration("kimi", home);
+  assert.equal(await readFile(path, "utf8"), first);
+  await uninstallOwnedIntegration("kimi", home);
+  assert.equal(await readFile(path, "utf8"), original);
+});
+
+test("Kimi Code honors KIMI_CODE_HOME and refuses malformed owned markers", async (context) => {
+  const home = await mkdtemp(join(tmpdir(), "isaiokay-integrations-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const configuredHome = join(home, "custom-kimi-home");
+  const installed = await installOwnedIntegration("kimi", home, "isaiokay", { KIMI_CODE_HOME: configuredHome });
+  assert.equal(installed.path, join(configuredHome, "config.toml"));
+  await writeFile(installed.path!, "# >>> isaiokay lifecycle hooks >>>\n", "utf8");
+  await assert.rejects(
+    () => installOwnedIntegration("kimi", home, "isaiokay", { KIMI_CODE_HOME: configuredHome }),
+    /malformed IsAIokay\.com hook markers/
+  );
+
+  await writeFile(installed.path!, [
+    "# <<< isaiokay lifecycle hooks <<<",
+    "# >>> isaiokay lifecycle hooks >>>",
+    "# isaiokay-prefixed-newline = false"
+  ].join("\n"), "utf8");
+  await assert.rejects(
+    () => installOwnedIntegration("kimi", home, "isaiokay", { KIMI_CODE_HOME: configuredHome }),
+    /malformed IsAIokay\.com hook markers/
+  );
+});
+
+test("Kimi Code round-trips existing TOML bytes including CRLF and trailing whitespace", async (context) => {
+  const home = await mkdtemp(join(tmpdir(), "isaiokay-integrations-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const path = join(home, ".kimi-code", "config.toml");
+  const original = 'default_model = "k3"\r\nmax_steps_per_turn = 100  ';
+  await mkdir(join(home, ".kimi-code"), { recursive: true });
+  await writeFile(path, original, "utf8");
+
+  await installOwnedIntegration("kimi", home);
+  const installed = await readFile(path, "utf8");
+  assert.match(installed, /isaiokay-prefixed-newline = true/);
+  assert.doesNotMatch(installed, /(?<!\r)\n/u);
+  await uninstallOwnedIntegration("kimi", home);
+  assert.equal(await readFile(path, "utf8"), original);
+});
+
+test("Kimi Code preserves a symlinked config and edits its target", async (context) => {
+  const home = await mkdtemp(join(tmpdir(), "isaiokay-integrations-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const managed = join(home, "dotfiles", "kimi.toml");
+  const path = join(home, ".kimi-code", "config.toml");
+  await mkdir(join(home, "dotfiles"), { recursive: true });
+  await mkdir(join(home, ".kimi-code"), { recursive: true });
+  await writeFile(managed, 'default_model = "k3"\n', "utf8");
+  await symlink(managed, path);
+
+  await installOwnedIntegration("kimi", home);
+  assert.match(await readFile(managed, "utf8"), /isaiokay hook --provider kimi/);
+  assert.equal((await lstat(path)).isSymbolicLink(), true);
+  await uninstallOwnedIntegration("kimi", home);
+  assert.equal(await readFile(managed, "utf8"), 'default_model = "k3"\n');
+  assert.equal((await lstat(path)).isSymbolicLink(), true);
 });
 
 test("malformed provider configuration is never overwritten", async (context) => {

@@ -42,6 +42,8 @@ describe("CLI feedback contracts", () => {
     expect(toolFallbackSlug("cursor")).toBe("cursor");
     expect(toolFallbackSlug("copilot-cli")).toBe("github-copilot-cli");
     expect(toolFallbackSlug("grok-build")).toBe("grok-build");
+    expect(toolFallbackSlug("qwen-code")).toBe("qwen-code");
+    expect(toolFallbackSlug("kimi-code")).toBe("kimi-code");
     expect(toolFallbackSlug("muse-code")).toBe("muse-code");
     expect(toolFallbackSlug("other")).toBeNull();
   });
@@ -51,6 +53,8 @@ describe("CLI feedback contracts", () => {
     expect(deriveCliAttribution(feedbackInput({ tool: "cursor", attribution: "verified_active" }))).toBe("model_at_end");
     expect(deriveCliAttribution(feedbackInput({ tool: "copilot-cli", attribution: "verified_active" }))).toBe("unknown");
     expect(deriveCliAttribution(feedbackInput({ tool: "grok-build", attribution: "verified_active" }))).toBe("unknown");
+    expect(deriveCliAttribution(feedbackInput({ tool: "qwen-code", attribution: "verified_active" }))).toBe("verified_start_only");
+    expect(deriveCliAttribution(feedbackInput({ tool: "kimi-code", attribution: "verified_active" }))).toBe("verified_start_only");
     expect(deriveCliAttribution(feedbackInput({ tool: "muse-code", attribution: "verified_active" }))).toBe("unknown");
     expect(deriveCliAttribution(feedbackInput({ tool: "codex", attribution: "mixed" }))).toBe("mixed");
     expect(deriveCliAttribution(feedbackInput({ tool: "claude-code", confirmedItemSlug: "claude-opus-5" }))).toBe("user_confirmed");

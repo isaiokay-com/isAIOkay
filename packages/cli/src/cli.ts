@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { doctorAdapter, installAdapter, uninstallAdapter } from "./adapters.js";
 import { ApiError, approveDeviceLogin, getAllowance, getCliTurnstileChallenge, getTrackedItems, isUuid, normalizeSameOriginWebUrl, pollDeviceLogin, revokeCredential, startDeviceLogin, submitFeedback } from "./api.js";
 import { normalizeProviderEvent } from "./normalizers.js";
-import { pendingSessionCount, recordedSessionCount, reminderStatus, type ReminderStatus } from "./prompt-policy.js";
+import { decidePrompt, pendingSessionCount, recordedSessionCount, reminderStatus, type ReminderStatus } from "./prompt-policy.js";
 import { createEventId, MAX_INPUT_BYTES, safeEventSummary, sessionHash as hashSession } from "./privacy.js";
 import { LocalStore, resolveStoragePaths } from "./storage.js";
 import { defaultHarnessCommand, detectShell, getShellIntegrationStatus, installShellIntegration, isSafeShellPath, renderShellIntegration, shellIntegrationActive, shellIntegrationInstalled, shellIntegrationPath, shellReloadCommand, SUPPORTED_SHELLS, uninstallShellIntegration, type SupportedShell } from "./shell-integration.js";
@@ -55,7 +55,7 @@ const FOREGROUND_SESSION_ENV = "ISAI_OKAY_FOREGROUND_SESSION";
 const FOREGROUND_PROVIDER_ENV = "ISAI_OKAY_FOREGROUND_PROVIDER";
 
 const BOOLEAN_FLAGS = new Set([
-  "all", "headless", "help", "json", "local", "no-color", "no-input", "no-open", "no-setup", "quiet", "verbose"
+  "all", "headless", "help", "json", "local", "no-color", "no-input", "no-open", "no-setup", "quiet", "silent", "verbose"
 ]);
 
 const parseArgs = (argv: string[]): ParsedArgs => {
@@ -212,7 +212,7 @@ const help = (): Record<string, unknown> => ({
 });
 
 const COMMAND_FLAGS: Record<string, readonly string[]> = {
-  hook: ["provider", "quiet"],
+  hook: ["provider", "quiet", "silent"],
   run: ["command"],
   shell: ["profile"],
   install: ["all"],
@@ -240,7 +240,9 @@ const SETUP_PROVIDERS: ReadonlyArray<{ provider: Provider; command: string; labe
   { provider: "gemini", command: "gemini", label: "Gemini CLI" },
   { provider: "copilot", command: "copilot", label: "GitHub Copilot CLI" },
   { provider: "amp", command: "amp", label: "Amp" },
-  { provider: "grok", command: "grok", label: "Grok Build" }
+  { provider: "grok", command: "grok", label: "Grok Build" },
+  { provider: "qwen", command: "qwen", label: "Qwen Code" },
+  { provider: "kimi", command: "kimi", label: "Kimi Code" }
 ];
 
 const detectSetupProviders = async (
@@ -462,6 +464,8 @@ const providerLabel = (provider: Provider): string => ({
   aider: "Aider",
   amp: "Amp",
   grok: "Grok Build",
+  qwen: "Qwen Code",
+  kimi: "Kimi Code",
   muse: "Muse Code"
 })[provider];
 
@@ -487,6 +491,7 @@ const experiencedMinutes = (status: ReminderStatus): number => Math.floor(status
 
 const runHook = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<number> => {
   const result = (body: Record<string, unknown>, systemMessage?: string): void => {
+    if (parsed.flags.has("silent")) return;
     writeJson(io, systemMessage ? { systemMessage } : parsed.flags.has("quiet") ? {} : body);
   };
   const provider = parseProvider(flagText(parsed.flags, "provider"));
@@ -945,7 +950,11 @@ const offerDetectedIntegrations = async (parsed: ParsedArgs, store: LocalStore, 
     const provider = parseProvider(value);
     if (!provider || !detected.some((candidate) => candidate.provider === provider)) continue;
     try {
-      const { integration } = await installAdapter(store, provider, { now: io.now?.() ?? Date.now(), home: io.home ?? homedir() });
+      const { integration } = await installAdapter(store, provider, {
+        now: io.now?.() ?? Date.now(),
+        home: io.home ?? homedir(),
+        env: io.env ?? {}
+      });
       io.stdout.write(`  ${style.green("✓")} ${integration.message}\n`);
     } catch (error) {
       io.stdout.write(`  ${style.red("✖")} ${provider}: ${error instanceof Error ? error.message : "installation failed"}\n`);
@@ -1200,6 +1209,8 @@ const providerTool = (provider: Provider): string => ({
   aider: "aider",
   amp: "amp",
   grok: "grok-build",
+  qwen: "qwen-code",
+  kimi: "kimi-code",
   muse: "muse-code"
 })[provider];
 
@@ -1266,9 +1277,24 @@ const providerAwareModelCatalog = (items: ApiTrackedItem[], provider: Provider):
   return scoped.length > 0 ? scoped : models;
 };
 
-const detectedCatalogSlug = (items: ApiTrackedItem[], model: string | null): string | undefined => {
+const MODEL_CATALOG_ALIASES: Partial<Record<Provider, Readonly<Record<string, string>>>> = {
+  qwen: {
+    "qwen3-8-max": "qwen-3-8-max",
+    "qwen3-8-max-preview": "qwen-3-8-max"
+  },
+  kimi: {
+    "k3": "kimi-k3",
+    "k3-256k": "kimi-k3",
+    "kimi-for-coding": "kimi-k2-7-code",
+    "kimi-for-coding-highspeed": "kimi-k2-7-code"
+  }
+};
+
+const detectedCatalogSlug = (items: ApiTrackedItem[], model: string | null, provider?: Provider): string | undefined => {
   if (!model) return undefined;
   const key = catalogKey(model);
+  const aliasedSlug = provider === undefined ? undefined : MODEL_CATALOG_ALIASES[provider]?.[key];
+  if (aliasedSlug && items.some((item) => item.slug === aliasedSlug)) return aliasedSlug;
   return items.find((item) => {
     const slug = catalogKey(item.slug);
     const name = catalogKey(item.name);
@@ -1383,7 +1409,7 @@ const runRateSubmit = async (
     const names = alreadyRatedProviderItems.map((item) => item.name).join(", ");
     io.stdout.write(`  ${style.dim(`Already rated in the rolling 24-hour window: ${names}. ${alreadyRatedProviderItems.length === providerItems.length ? "No eligible model remains for this provider." : "Choose another model."}`)}\n\n`);
   }
-  detectedItemSlug = detectedCatalogSlug(providerItems, model);
+  detectedItemSlug = detectedCatalogSlug(providerItems, model, selected.provider);
   const chosenItem = confirmedItemSlug
     ? catalogItems.find((item) => item.slug === confirmedItemSlug)
     : detectedItemSlug
@@ -1400,9 +1426,9 @@ const runRateSubmit = async (
     }
     try {
       const items = providerItems.filter((item) => !alreadyRated.has(item.id));
-      formInitialItemSlug = detectedCatalogSlug(items, model);
+      formInitialItemSlug = detectedCatalogSlug(items, model, selected.provider);
       const observedSlugs = models.flatMap((observedModel) => {
-        const slug = detectedCatalogSlug(items, observedModel);
+        const slug = detectedCatalogSlug(items, observedModel, selected.provider);
         return slug === undefined ? [] : [slug];
       });
       const uniqueObservedSlugs = [...new Set(observedSlugs)];
@@ -1648,7 +1674,8 @@ const runAdapterCommand = async (parsed: ParsedArgs, store: LocalStore, io: CliI
       try {
         const { integration } = await installAdapter(store, provider, {
           now: io.now?.() ?? Date.now(),
-          home: io.home ?? homedir()
+          home: io.home ?? homedir(),
+          env: io.env ?? {}
         });
         results.push({ provider, installed: integration.mode === "installed", message: integration.message });
       } catch (error) {
@@ -1678,7 +1705,7 @@ const runAdapterCommand = async (parsed: ParsedArgs, store: LocalStore, io: CliI
     const results: Array<{ provider: Provider; removed: boolean; message: string }> = [];
     for (const provider of PROVIDERS) {
       try {
-        const { integration } = await uninstallAdapter(store, provider, { home });
+        const { integration } = await uninstallAdapter(store, provider, { home, env: io.env ?? {} });
         results.push({ provider, removed: true, message: integration.message });
       } catch (error) {
         results.push({ provider, removed: false, message: error instanceof Error ? error.message : "Removal failed." });
@@ -1754,7 +1781,8 @@ const runAdapterCommand = async (parsed: ParsedArgs, store: LocalStore, io: CliI
   if (parsed.command === "install") {
     const { plan, integration } = await installAdapter(store, provider, {
       now: io.now?.() ?? Date.now(),
-      home: io.home ?? homedir()
+      home: io.home ?? homedir(),
+      env: io.env ?? {}
     });
     const body = { registered: true, ...plan, integration };
     writeResult(parsed, io, body, (style) => {
@@ -1767,7 +1795,7 @@ const runAdapterCommand = async (parsed: ParsedArgs, store: LocalStore, io: CliI
     });
     return 0;
   }
-  const { plan, integration } = await uninstallAdapter(store, provider, { home: io.home ?? homedir() });
+  const { plan, integration } = await uninstallAdapter(store, provider, { home: io.home ?? homedir(), env: io.env ?? {} });
   const body = { registered: false, ...plan, integration };
   writeResult(parsed, io, body, (style) => io.stdout.write(`\n  ${style.green("✓")} ${style.bold(`${provider} integration removed.`)}\n\n`));
   return 0;
@@ -1783,7 +1811,7 @@ const runDoctor = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Prom
   const home = io.home ?? homedir();
   const env = io.env ?? process.env;
   const platform = io.platform ?? process.platform;
-  const results = await Promise.all(providers.map((provider) => doctorAdapter(store, provider, home)));
+  const results = await Promise.all(providers.map((provider) => doctorAdapter(store, provider, home, env)));
   const shellName = detectShell(env, platform);
   const config = await store.getConfig();
   const registeredShell = shellName ? config.shellIntegrations.findLast((entry) => entry.shell === shellName) : undefined;
@@ -1866,12 +1894,16 @@ export const runCli = async (argv: string[], io: CliIo): Promise<number> => {
     try {
       const [config, state, credential] = await Promise.all([store.getConfig(), store.getState(), store.getCredential()]);
       const now = io.now?.() ?? Date.now();
-      const hasPendingSession = state.events.some((event) => state.pendingEventIds.includes(event.id));
       if (config.onboardingCompletedAt === null) {
         return await runSetup({ ...parsed, command: "setup" }, store, io);
       }
-      if (hasPendingSession && credential && credential.expiresAt > now) {
-        return await runRate({ ...parsed, command: "rate" }, store, io);
+      // A lifecycle start by itself is only evidence that a harness opened. It
+      // must not make a bare command present that provider as the session the
+      // user just completed (for example from an unrelated terminal tab).
+      // Route through the normal prompt policy so only a meaningful completed
+      // session is selected, using the policy's exact terminal event ID.
+      if (credential && credential.expiresAt > now && decidePrompt(state, now).eligible) {
+        return await runPrompt({ ...parsed, command: "prompt" }, store, io);
       }
       return await runStatus(defaultParsed, store, io);
     } catch {

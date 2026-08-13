@@ -48,6 +48,26 @@ test("short sessions accumulate into a meaningful daily experience", () => {
   assert.deepEqual(decidePrompt(state, now), { eligible: true, reason: "eligible", eventId: secondEnd.id });
 });
 
+test("a newer start-only session cannot displace the completed session selected for rating", () => {
+  const state = stateFor("a".repeat(43));
+  state.events = state.events.map((entry) => ({ ...entry, occurredAt: entry.occurredAt - 1_000 }));
+  const unrelatedStart = {
+    ...event("00000000-0000-4000-8000-000000000003", "b".repeat(43), now),
+    provider: "claude" as const,
+    attribution: "session_start" as const,
+    model: "claude-sonnet-5"
+  };
+  state.events.push(unrelatedStart);
+  state.pendingEventIds.push(unrelatedStart.id);
+
+  assert.deepEqual(decidePrompt(state, now), {
+    eligible: true,
+    reason: "eligible",
+    eventId: state.events[1]!.id
+  });
+  assert.equal(reminderStatus(state, now).pendingSessionCountToday, 1);
+});
+
 test("prompt cadence enforces cooldown, a local-calendar daily cap, and never-ask-again", () => {
   const state = stateFor("a".repeat(43));
   state.rate.nextAllowedAt = now + 1;

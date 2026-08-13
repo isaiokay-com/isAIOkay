@@ -11,11 +11,13 @@ import {
   normalizeCursor,
   normalizeGemini,
   normalizeGrok,
+  normalizeKimi,
   normalizeMuse,
   normalizeOpenCode,
+  normalizeQwen,
   normalizeWindsurf
 } from "./normalizers.js";
-import { installOwnedIntegration, uninstallOwnedIntegration, type IntegrationResult } from "./integrations.js";
+import { installOwnedIntegration, resolveGrokHome, resolveKimiHome, uninstallOwnedIntegration, type IntegrationResult } from "./integrations.js";
 import { pathExists, type LocalStore } from "./storage.js";
 import type { AdapterPlan, DoctorResult, Provider, ProviderAdapter } from "./types.js";
 
@@ -24,7 +26,7 @@ import type { AdapterPlan, DoctorResult, Provider, ProviderAdapter } from "./typ
  * app-owned integration file. Everything else stays an explicit manual or
  * bridge flow so the CLI never mutates an unverified host configuration.
  */
-const AUTO_INSTALL_PROVIDERS = new Set<Provider>(["codex", "claude", "cursor", "opencode", "gemini", "copilot", "amp", "grok"]);
+const AUTO_INSTALL_PROVIDERS = new Set<Provider>(["codex", "claude", "cursor", "opencode", "gemini", "copilot", "amp", "grok", "qwen", "kimi"]);
 const BRIDGE_PROVIDERS = new Set<Provider>(["cline", "windsurf"]);
 
 const planModeFor = (provider: Provider): AdapterPlan["mode"] => {
@@ -33,7 +35,7 @@ const planModeFor = (provider: Provider): AdapterPlan["mode"] => {
   return "manual";
 };
 
-const providerConfigCandidates = (provider: Provider, home = homedir()): string[] => {
+const providerConfigCandidates = (provider: Provider, home = homedir(), env: NodeJS.ProcessEnv = {}): string[] => {
   switch (provider) {
     case "codex":
       return [join(home, ".codex", "config.toml")];
@@ -48,7 +50,11 @@ const providerConfigCandidates = (provider: Provider, home = homedir()): string[
     case "amp":
       return [join(home, ".config", "amp")];
     case "grok":
-      return [join(home, ".grok", "hooks")];
+      return [join(resolveGrokHome(home, env), "hooks")];
+    case "qwen":
+      return [join(home, ".qwen", "settings.json")];
+    case "kimi":
+      return [join(resolveKimiHome(home, env), "config.toml")];
     case "muse":
       return [];
     case "copilot":
@@ -60,7 +66,7 @@ const providerConfigCandidates = (provider: Provider, home = homedir()): string[
 };
 
 /** The app-owned file `install` creates for an auto-install provider. */
-const ownedIntegrationPath = (provider: Provider, home: string): string | null => {
+const ownedIntegrationPath = (provider: Provider, home: string, env: NodeJS.ProcessEnv = {}): string | null => {
   switch (provider) {
     case "codex": return join(home, ".codex", "hooks.json");
     case "claude": return join(home, ".claude", "settings.json");
@@ -69,7 +75,9 @@ const ownedIntegrationPath = (provider: Provider, home: string): string | null =
     case "gemini": return join(home, ".gemini", "settings.json");
     case "amp": return join(home, ".config", "amp", "plugins", "isaiokay.ts");
     case "cursor": return join(home, ".cursor", "hooks.json");
-    case "grok": return join(home, ".grok", "hooks", "isaiokay.json");
+    case "grok": return join(resolveGrokHome(home, env), "hooks", "isaiokay.json");
+    case "qwen": return join(home, ".qwen", "settings.json");
+    case "kimi": return join(resolveKimiHome(home, env), "config.toml");
     default: return null;
   }
 };
@@ -79,8 +87,8 @@ const ownedIntegrationPath = (provider: Provider, home: string): string | null =
  * existence of isolated app-owned files. It never parses or retains vendor
  * configuration beyond the owned marker check, and it never uploads anything.
  */
-const ownedIntegrationFound = async (provider: Provider, home: string): Promise<boolean> => {
-  const path = ownedIntegrationPath(provider, home);
+const ownedIntegrationFound = async (provider: Provider, home: string, env: NodeJS.ProcessEnv = {}): Promise<boolean> => {
+  const path = ownedIntegrationPath(provider, home, env);
   if (path === null) return false;
   if (provider === "copilot" || provider === "opencode" || provider === "amp" || provider === "grok") return pathExists(path);
   if (!(await pathExists(path))) return false;
@@ -105,6 +113,8 @@ const reasonFor = (provider: Provider): string => {
     case "aider": return "Aider is wrapper/manual only; this CLI does not alter Aider configuration.";
     case "amp": return "An isolated Amp agent.end plugin records a minimized thread envelope and uses Amp's native notification UI; model confirmation remains required.";
     case "grok": return "An isolated Grok Build SessionStart/Stop hook file records genuine completed turns without blocking or continuing the agent.";
+    case "qwen": return "Qwen Code SessionStart records the documented active model; Stop and SessionEnd provide lifecycle completion without reading conversation content.";
+    case "kimi": return "An owned Kimi Code TOML block records SessionStart/Stop/SessionEnd activity and the documented start model; model confirmation remains required because later changes are not observable.";
     case "muse": return "Muse Code uses the foreground wrapper until Meta publishes a stable lifecycle hook contract.";
   }
 };
@@ -122,13 +132,15 @@ export const providerAdapters: readonly ProviderAdapter[] = [
   { provider: "aider", mode: "manual", description: reasonFor("aider"), normalize: normalizeAider },
   { provider: "amp", mode: "install", description: reasonFor("amp"), normalize: normalizeAmp },
   { provider: "grok", mode: "install", description: reasonFor("grok"), normalize: normalizeGrok },
+  { provider: "qwen", mode: "install", description: reasonFor("qwen"), normalize: normalizeQwen },
+  { provider: "kimi", mode: "install", description: reasonFor("kimi"), normalize: normalizeKimi },
   { provider: "muse", mode: "manual", description: reasonFor("muse"), normalize: normalizeMuse }
 ];
 
-export const getAdapterPlan = (provider: Provider, home = homedir()): AdapterPlan => ({
+export const getAdapterPlan = (provider: Provider, home = homedir(), env: NodeJS.ProcessEnv = {}): AdapterPlan => ({
   provider,
   mode: planModeFor(provider),
-  configCandidates: providerConfigCandidates(provider, home),
+  configCandidates: providerConfigCandidates(provider, home, env),
   hookCommand: `isaiokay hook --provider ${provider}`,
   reason: reasonFor(provider)
 });
@@ -141,13 +153,14 @@ export interface AdapterInstallResult {
 export const installAdapter = async (
   store: LocalStore,
   provider: Provider,
-  options: { now?: number; home?: string; executable?: string } = {}
+  options: { now?: number; home?: string; executable?: string; env?: NodeJS.ProcessEnv } = {}
 ): Promise<AdapterInstallResult> => {
   const now = options.now ?? Date.now();
   const home = options.home ?? homedir();
-  const plan = getAdapterPlan(provider, home);
+  const env = options.env ?? {};
+  const plan = getAdapterPlan(provider, home, env);
   const integration = plan.mode === "install"
-    ? await installOwnedIntegration(provider, home, options.executable ?? "isaiokay")
+    ? await installOwnedIntegration(provider, home, options.executable ?? "isaiokay", env)
     : { provider, mode: "manual" as const, path: null, message: "This provider requires its documented manual bridge; no provider configuration was changed." };
   if (integration.mode === "installed") await store.registerAdapter(provider, "installed", now);
   return { plan, integration };
@@ -156,24 +169,25 @@ export const installAdapter = async (
 export const uninstallAdapter = async (
   store: LocalStore,
   provider: Provider,
-  options: { home?: string } = {}
+  options: { home?: string; env?: NodeJS.ProcessEnv } = {}
 ): Promise<AdapterInstallResult> => {
   const home = options.home ?? homedir();
-  const plan = getAdapterPlan(provider, home);
+  const env = options.env ?? {};
+  const plan = getAdapterPlan(provider, home, env);
   const integration = plan.mode === "install"
-    ? await uninstallOwnedIntegration(provider, home)
+    ? await uninstallOwnedIntegration(provider, home, env)
     : { provider, mode: "manual" as const, path: null, message: "No provider-owned file was changed." };
   await store.unregisterAdapter(provider);
   return { plan, integration };
 };
 
-export const doctorAdapter = async (store: LocalStore, provider: Provider, home = homedir()): Promise<DoctorResult> => {
+export const doctorAdapter = async (store: LocalStore, provider: Provider, home = homedir(), env: NodeJS.ProcessEnv = {}): Promise<DoctorResult> => {
   const [config, owned, ...exists] = await Promise.all([
     store.getConfig(),
-    ownedIntegrationFound(provider, home),
-    ...getAdapterPlan(provider, home).configCandidates.map(pathExists)
+    ownedIntegrationFound(provider, home, env),
+    ...getAdapterPlan(provider, home, env).configCandidates.map(pathExists)
   ]);
-  const plan = getAdapterPlan(provider, home);
+  const plan = getAdapterPlan(provider, home, env);
   return {
     provider,
     mode: plan.mode,

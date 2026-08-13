@@ -10,8 +10,10 @@ import {
   normalizeCursor,
   normalizeGemini,
   normalizeGrok,
+  normalizeKimi,
   normalizeMuse,
   normalizeOpenCode,
+  normalizeQwen,
   normalizeWindsurf
 } from "../src/normalizers.js";
 
@@ -140,11 +142,39 @@ test("Grok records genuine completed turns and Muse accepts only its explicit wr
   assert.equal(stop.event.attribution, "turn_complete");
   assert.equal(stop.notificationSafe, false);
   assert.equal(JSON.stringify(stop.event).includes("private"), false);
+  assert.equal(normalizeGrok({ hookEventName: "Stop", sessionId: "grok-session" }, secret, now).accepted, false);
   assert.equal(normalizeGrok({ hookEventName: "Stop", sessionId: "grok-session", reason: "shutdown" }, secret, now).accepted, false);
 
   const muse = accepted(normalizeMuse({ event: "isaiokay.muse.model", session_id: "muse-session", model: "muse-spark-1.2" }, secret, now)).event;
   assert.equal(muse.provider, "muse");
   assert.equal(muse.model, "muse-spark-1.2");
+});
+
+test("Qwen and Kimi record only their documented start-model fields", () => {
+  const qwenStart = accepted(normalizeQwen({
+    hook_event_name: "SessionStart",
+    session_id: "private-qwen-session",
+    model: "qwen3.8-max",
+    cwd: "/private/workspace",
+    prompt: "private"
+  }, secret, now)).event;
+  assert.equal(qwenStart.provider, "qwen");
+  assert.equal(qwenStart.attribution, "session_start");
+  assert.equal(qwenStart.model, "qwen3.8-max");
+  assert.equal(JSON.stringify(qwenStart).includes("private/workspace"), false);
+  const qwenStop = accepted(normalizeQwen({ hook_event_name: "Stop", session_id: "private-qwen-session" }, secret, now));
+  assert.equal(qwenStop.event.attribution, "turn_complete");
+  assert.equal(qwenStop.event.model, null);
+  assert.equal(qwenStop.notificationSafe, false);
+
+  const kimiStart = accepted(normalizeKimi({ hook_event_name: "SessionStart", session_id: "private-kimi-session", model: "k3", profile: "kimi-code" }, secret, now)).event;
+  assert.equal(kimiStart.provider, "kimi");
+  assert.equal(kimiStart.attribution, "session_start");
+  assert.equal(kimiStart.model, "k3");
+  assert.equal(accepted(normalizeKimi({ hook_event_name: "SessionStart", session_id: "private-kimi-session", model: "kimi-for-coding-highspeed" }, secret, now)).event.model, "kimi-for-coding-highspeed");
+  const kimiStop = accepted(normalizeKimi({ hook_event_name: "Stop", session_id: "private-kimi-session", stop_hook_active: false }, secret, now)).event;
+  assert.equal(kimiStop.attribution, "turn_complete");
+  assert.equal(normalizeKimi({ hook_event_name: "PreToolUse" }, secret, now).accepted, false);
 });
 
 test("unsafe model labels and raw session identifiers never become a stored event", () => {

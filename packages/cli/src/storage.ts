@@ -32,7 +32,7 @@ const asFiniteTimestamp = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 
 const asProvider = (value: unknown): Provider | null =>
-  value === "codex" || value === "claude" || value === "cursor" || value === "opencode" || value === "gemini" || value === "copilot" || value === "cline" || value === "windsurf" || value === "aider" || value === "amp" || value === "grok" || value === "muse"
+  value === "codex" || value === "claude" || value === "cursor" || value === "opencode" || value === "gemini" || value === "copilot" || value === "cline" || value === "windsurf" || value === "aider" || value === "amp" || value === "grok" || value === "qwen" || value === "kimi" || value === "muse"
     ? value
     : null;
 

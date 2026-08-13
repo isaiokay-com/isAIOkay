@@ -297,7 +297,7 @@ export const normalizeGrok = (payload: unknown, hmacSecret: string, now = Date.n
   const marker = eventName(payload);
   if (marker === "stop") {
     const reason = firstTextAt(payload, [["reason"]]);
-    if (reason !== null && reason !== "end_turn") return invalid("unsupported_event");
+    if (reason !== "end_turn") return invalid("unsupported_event");
     return {
       accepted: true,
       notificationSafe: false,
@@ -309,6 +309,51 @@ export const normalizeGrok = (payload: unknown, hmacSecret: string, now = Date.n
     accepted: true,
     notificationSafe: false,
     event: makeEvent({ provider: "grok", attribution: "session_start", model: null, rawSessionId: rawSession(payload), hmacSecret, input: payload, now })
+  };
+};
+
+/** Qwen Code documents the exact active model on SessionStart. */
+export const normalizeQwen = (payload: unknown, hmacSecret: string, now = Date.now()): NormalizationResult => {
+  if (!isRecord(payload)) return invalid("invalid_payload");
+  const marker = eventName(payload);
+  if (marker === "stop" || marker === "sessionend") {
+    return {
+      accepted: true,
+      notificationSafe: false,
+      event: makeEvent({ provider: "qwen", attribution: marker === "stop" ? "turn_complete" : "session_end_unknown", model: null, rawSessionId: rawSession(payload), hmacSecret, input: payload, now })
+    };
+  }
+  if (marker !== "sessionstart") return invalid("unsupported_event");
+  const candidate = rawModel(payload);
+  const model = candidate === null ? null : normalizeModelIdentifier(candidate);
+  if (candidate !== null && model === null) return invalid("unsafe_model_identifier");
+  return {
+    accepted: true,
+    notificationSafe: false,
+    event: makeEvent({ provider: "qwen", attribution: "session_start", model, rawSessionId: rawSession(payload), hmacSecret, input: payload, now })
+  };
+};
+
+/** Kimi Code documents the configured model on SessionStart. */
+export const normalizeKimi = (payload: unknown, hmacSecret: string, now = Date.now()): NormalizationResult => {
+  if (!isRecord(payload)) return invalid("invalid_payload");
+  const marker = eventName(payload);
+  if (marker !== "sessionstart" && marker !== "stop" && marker !== "sessionend") return invalid("unsupported_event");
+  const candidate = marker === "sessionstart" ? rawModel(payload) : null;
+  const model = candidate === null ? null : normalizeModelIdentifier(candidate);
+  if (candidate !== null && model === null) return invalid("unsafe_model_identifier");
+  return {
+    accepted: true,
+    notificationSafe: false,
+    event: makeEvent({
+      provider: "kimi",
+      attribution: marker === "sessionstart" ? "session_start" : marker === "stop" ? "turn_complete" : "session_end_unknown",
+      model,
+      rawSessionId: rawSession(payload),
+      hmacSecret,
+      input: payload,
+      now
+    })
   };
 };
 
@@ -339,6 +384,8 @@ export const normalizeProviderEvent = (provider: Provider, payload: unknown, hma
     case "aider": return normalizeAider(payload, hmacSecret, now);
     case "amp": return normalizeAmp(payload, hmacSecret, now);
     case "grok": return normalizeGrok(payload, hmacSecret, now);
+    case "qwen": return normalizeQwen(payload, hmacSecret, now);
+    case "kimi": return normalizeKimi(payload, hmacSecret, now);
     case "muse": return normalizeMuse(payload, hmacSecret, now);
   }
 };

@@ -144,6 +144,18 @@ test("hook is noninteractive, returns success on rejected input, and persists on
   assert.match(rejected.stdout(), /"accepted":false/);
 });
 
+test("silent hooks persist safe activity without writing into the host context", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const configDir = join(directory, "config");
+  const stateDir = join(directory, "state");
+  const captured = capturedIo(JSON.stringify({ hook_event_name: "Stop", session_id: "private-kimi-session" }));
+  assert.equal(await runCli(["hook", "--provider", "kimi", "--silent", "--config-dir", configDir, "--state-dir", stateDir], captured.io), 0);
+  assert.equal(captured.stdout(), "");
+  const state = JSON.parse(await readFile(join(stateDir, "isaiokay", "state.json"), "utf8")) as { events: Array<{ provider: string; model: string | null }> };
+  assert.deepEqual(state.events.map((event) => ({ provider: event.provider, model: event.model })), [{ provider: "kimi", model: null }]);
+});
+
 test("a safe turn hook can remind during a long-running foreground wrapper", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
   context.after(() => rm(directory, { recursive: true, force: true }));
@@ -952,7 +964,7 @@ test("login detects popular CLIs and installs only explicitly selected integrati
   }, true);
 
   assert.equal(await runCli(["login", "--headless"], login.io), 0);
-  assert.deepEqual(detectedCommands, ["codex", "claude", "agent", "opencode", "gemini", "copilot", "amp", "grok"]);
+  assert.deepEqual(detectedCommands, ["codex", "claude", "agent", "opencode", "gemini", "copilot", "amp", "grok", "qwen", "kimi"]);
   assert.match(login.stdout(), /Detected coding CLIs/);
   assert.match(login.stdout(), /doctor/);
   assert.match(await readFile(join(directory, ".codex", "hooks.json"), "utf8"), /isaiokay hook --provider codex/);
@@ -1057,7 +1069,7 @@ test("cancelling first-run setup leaves onboarding incomplete and allows a retry
   assert.equal((await store.getConfig()).onboardingCompletedAt, 1_700_000_000_000);
 });
 
-test("an empty interactive command opens one two-rating screen when a signed-in session is pending", async (context) => {
+test("an empty interactive command opens one two-rating screen when a signed-in session is eligible", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
   context.after(() => rm(directory, { recursive: true, force: true }));
   const feedbackBodies: string[] = [];
@@ -1082,8 +1094,16 @@ test("an empty interactive command opens one two-rating screen when a signed-in 
   const login = capturedIo("", { fetch: fetcher, home: directory });
   assert.equal(await runCli(["login", "--no-open"], login.io), 0);
   await new LocalStore(resolveStoragePaths({ home: directory, env: {} })).completeOnboarding();
-  const hook = capturedIo(JSON.stringify({ event: "model.active", model: "gpt-5.6-sol", session_id: "private-session" }), { home: directory });
-  assert.equal(await runCli(["hook", "--provider", "codex"], hook.io), 0);
+  for (const [event, occurredAt] of [
+    ["SessionStart", 1_700_000_000_000 - 21 * 60_000],
+    ["Stop", 1_700_000_000_000]
+  ] as const) {
+    const hook = capturedIo(JSON.stringify({ event, model: "gpt-5.6-sol", session_id: "private-session" }), {
+      home: directory,
+      now: () => occurredAt
+    });
+    assert.equal(await runCli(["hook", "--provider", "codex"], hook.io), 0);
+  }
 
   const screens: string[] = [];
   let typedPromptCalled = false;
@@ -1108,6 +1128,43 @@ test("an empty interactive command opens one two-rating screen when a signed-in 
   assert.match(feedbackBodies[0] ?? "", /"resultQualityRating":5/);
   assert.match(feedbackBodies[0] ?? "", /"usageEfficiencyRating":4/);
   assert.match(feedbackBodies[0] ?? "", /"confirmedItemSlug":"gpt-5-6-sol"/);
+});
+
+test("a fresh bare command does not infer Claude from a start-only event in another terminal", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const now = 1_800_000_000_000;
+  const store = new LocalStore(resolveStoragePaths({ home: directory, env: {} }));
+  await store.completeOnboarding(now - 1_000);
+  await store.saveCredential({
+    schemaVersion: 1,
+    serverUrl: "https://isaiokay.com",
+    accessToken: `iai_${"a".repeat(64)}`,
+    expiresAt: now + 60_000
+  });
+  const hook = capturedIo(JSON.stringify({
+    hook_event_name: "SessionStart",
+    model: "claude-sonnet-5",
+    session_id: "claude-session-in-another-tab"
+  }), { home: directory, now: () => now });
+  assert.equal(await runCli(["hook", "--provider", "claude"], hook.io), 0);
+
+  let formOpened = false;
+  let fetched = false;
+  const freshTab = capturedIo("", {
+    home: directory,
+    now: () => now,
+    env: { TERM: "xterm-256color" },
+    commandExists: async () => false,
+    fetch: async () => { fetched = true; throw new Error("must not fetch"); },
+    form: async () => { formOpened = true; return {}; }
+  }, true);
+
+  assert.equal(await runCli([], freshTab.io), 0);
+  assert.equal(formOpened, false);
+  assert.equal(fetched, false);
+  assert.match(freshTab.stdout(), /Signed in/);
+  assert.doesNotMatch(freshTab.stdout(), /Rate this session|Claude Fable|Claude Opus|Claude Sonnet/);
 });
 
 test("interactive ratings exclude models already rated in the rolling window", async (context) => {
@@ -1229,6 +1286,138 @@ test("Claude's SessionStart model is preselected from an Anthropic-only catalog"
   assert.match(feedbackBody, /"rawModelLabel":"claude-sonnet-5"/);
   assert.match(feedbackBody, /"confirmedItemSlug":"claude-sonnet-5"/);
   assert.match(feedbackBody, /"attribution":"user_confirmed"/);
+});
+
+test("Grok Build lifecycle hooks produce an xAI-scoped rateable session", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const now = 1_800_000_000_000;
+  const store = new LocalStore(resolveStoragePaths({ home: directory, env: {} }));
+  await store.saveCredential({
+    schemaVersion: 1,
+    serverUrl: "https://isaiokay.com",
+    accessToken: `iai_${"a".repeat(64)}`,
+    expiresAt: now + 60_000
+  });
+
+  for (const [hookEventName, occurredAt, reason] of [
+    ["session_start", now - 21 * 60_000, undefined],
+    ["stop", now, "end_turn"]
+  ] as const) {
+    const hook = capturedIo(JSON.stringify({
+      hookEventName,
+      sessionId: "private-grok-session",
+      cwd: "/private/workspace",
+      workspaceRoot: "/private/workspace",
+      reason
+    }), { home: directory, now: () => occurredAt });
+    assert.equal(await runCli(["hook", "--provider", "grok"], hook.io), 0);
+    assert.match(hook.stdout(), /"accepted":true/);
+  }
+
+  let feedbackBody = "";
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/cli/items")) return Response.json({ items: [
+      { id: "1", slug: "claude-sonnet-5", name: "Claude Sonnet 5", providerName: "Anthropic", type: "model" },
+      { id: "2", slug: "grok-4-6", name: "Grok 4.6", providerName: "xAI", type: "model" },
+      { id: "3", slug: "grok-build", name: "Grok Build", providerName: "xAI", type: "agent" }
+    ] });
+    if (url.endsWith("/api/cli/feedback")) {
+      feedbackBody = typeof init?.body === "string" ? init.body : "";
+      return Response.json({ accepted: true, reportId: "report-id" }, { status: 201 });
+    }
+    return Response.json({ error: { code: "unexpected", message: "Unexpected request" } }, { status: 500 });
+  };
+  const rating = capturedIo("", {
+    fetch: fetcher,
+    home: directory,
+    now: () => now,
+    env: { TERM: "xterm-256color" },
+    form: async (_title, fields) => {
+      assert.equal(fields[0]?.name, "item");
+      assert.deepEqual(fields[0]?.choices.map((choice) => choice.value), ["grok-4-6"]);
+      return { item: "grok-4-6", resultQuality: "5", usageEfficiency: "4" };
+    }
+  }, true);
+
+  assert.equal(await runCli(["rate"], rating.io), 0);
+  assert.match(feedbackBody, /"tool":"grok-build"/);
+  assert.match(feedbackBody, /"confirmedItemSlug":"grok-4-6"/);
+  assert.doesNotMatch(await readFile(store.paths.stateFile, "utf8"), /private-grok-session|private\/workspace/);
+});
+
+test("Qwen and Kimi lifecycle hooks preselect known models without hiding third-party providers", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const now = 1_800_000_000_000;
+  const cases = [
+    {
+      provider: "qwen" as const,
+      start: { hook_event_name: "SessionStart", session_id: "private-qwen-session", model: "qwen3.8-max", cwd: "/private/qwen" },
+      stop: { hook_event_name: "Stop", session_id: "private-qwen-session" },
+      models: [
+        { id: "q1", slug: "qwen-3-8-max", name: "Qwen 3.8 Max", providerName: "Qwen", type: "model" as const }
+      ],
+      item: "qwen-3-8-max",
+      tool: "qwen-code"
+    },
+    {
+      provider: "kimi" as const,
+      start: { hook_event_name: "SessionStart", session_id: "private-kimi-session", model: "k3", profile: "kimi-code", cwd: "/private/kimi" },
+      stop: { hook_event_name: "Stop", session_id: "private-kimi-session", stop_hook_active: false },
+      models: [
+        { id: "k1", slug: "kimi-k3", name: "Kimi K3", providerName: "Kimi", type: "model" as const },
+        { id: "k2", slug: "kimi-k2-7-code", name: "Kimi K2.7 Code", providerName: "Kimi", type: "model" as const }
+      ],
+      item: "kimi-k3",
+      tool: "kimi-code"
+    }
+  ];
+
+  for (const candidate of cases) {
+    const home = join(root, candidate.provider);
+    const store = new LocalStore(resolveStoragePaths({ home, env: {} }));
+    await store.saveCredential({
+      schemaVersion: 1,
+      serverUrl: "https://isaiokay.com",
+      accessToken: `iai_${"a".repeat(64)}`,
+      expiresAt: now + 60_000
+    });
+    for (const [payload, occurredAt] of [[candidate.start, now - 21 * 60_000], [candidate.stop, now]] as const) {
+      const hook = capturedIo(JSON.stringify(payload), { home, now: () => occurredAt });
+      assert.equal(await runCli(["hook", "--provider", candidate.provider, "--silent"], hook.io), 0);
+      assert.equal(hook.stdout(), "");
+    }
+
+    let feedbackBody = "";
+    const unrelated = { id: "o1", slug: "gpt-5-6-sol", name: "GPT-5.6 Sol", providerName: "OpenAI", type: "model" as const };
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/cli/items")) return Response.json({ items: [unrelated, ...candidate.models] });
+      if (url.endsWith("/api/cli/feedback")) {
+        feedbackBody = typeof init?.body === "string" ? init.body : "";
+        return Response.json({ accepted: true, reportId: `${candidate.provider}-report` }, { status: 201 });
+      }
+      return Response.json({ error: { code: "unexpected", message: "Unexpected request" } }, { status: 500 });
+    };
+    const rating = capturedIo("", {
+      fetch: fetcher,
+      home,
+      now: () => now,
+      env: { TERM: "xterm-256color" },
+      form: async (_title, fields) => {
+        assert.equal(fields[0]?.name, "item");
+        assert.deepEqual(fields[0]?.choices.map((choice) => choice.value), [unrelated.slug, ...candidate.models.map((model) => model.slug)]);
+        assert.equal(fields[0]?.initialValue, candidate.item);
+        return { item: candidate.item, resultQuality: "5", usageEfficiency: "4" };
+      }
+    }, true);
+    assert.equal(await runCli(["rate"], rating.io), 0);
+    assert.match(feedbackBody, new RegExp(`"tool":"${candidate.tool}"`));
+    assert.match(feedbackBody, new RegExp(`"confirmedItemSlug":"${candidate.item}"`));
+    assert.doesNotMatch(await readFile(store.paths.stateFile, "utf8"), /private-(?:qwen|kimi)-session|private\/(?:qwen|kimi)/);
+  }
 });
 
 test("a mixed OpenCode session offers only the models actually observed", async (context) => {

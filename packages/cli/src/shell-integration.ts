@@ -29,6 +29,8 @@ export const FOREGROUND_HARNESSES: ReadonlyArray<{ provider: Provider; command: 
   { provider: "aider", command: "aider" },
   { provider: "amp", command: "amp" },
   { provider: "grok", command: "grok" },
+  { provider: "qwen", command: "qwen" },
+  { provider: "kimi", command: "kimi" },
   { provider: "muse", command: "muse" }
 ];
 

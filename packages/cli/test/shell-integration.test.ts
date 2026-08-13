@@ -77,6 +77,8 @@ test("managed zsh integration preserves user configuration and is idempotent", a
   assert.match(installed, /claude\(\).*isaiokay run claude/);
   assert.match(installed, /agent\(\).*isaiokay run cursor/);
   assert.match(installed, /grok\(\).*isaiokay run grok/);
+  assert.match(installed, /qwen\(\).*isaiokay run qwen/);
+  assert.match(installed, /kimi\(\).*isaiokay run kimi/);
   assert.match(installed, /muse\(\).*isaiokay run muse/);
   assert.match(installed, /\[ -t 0 \].*\[ -t 1 \]/);
   assert.match(installed, /! \$\+functions\[codex\].*! \$\+aliases\[codex\]/);

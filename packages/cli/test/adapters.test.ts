@@ -73,9 +73,9 @@ test("manual adapters never rewrite a provider config and doctor reports their h
 
 test("adapter metadata matches the supported auto-install and explicit manual/bridge sets", () => {
   const providers = providerAdapters.map((adapter) => adapter.provider);
-  assert.deepEqual(providers, ["codex", "claude", "cursor", "opencode", "gemini", "copilot", "cline", "windsurf", "aider", "amp", "grok", "muse"]);
+  assert.deepEqual(providers, ["codex", "claude", "cursor", "opencode", "gemini", "copilot", "cline", "windsurf", "aider", "amp", "grok", "qwen", "kimi", "muse"]);
   assert.equal(providers.includes("roo" as never), false);
-  for (const provider of ["codex", "claude", "cursor", "opencode", "gemini", "copilot", "amp", "grok"] as const) {
+  for (const provider of ["codex", "claude", "cursor", "opencode", "gemini", "copilot", "amp", "grok", "qwen", "kimi"] as const) {
     assert.equal(providerAdapters.find((adapter) => adapter.provider === provider)?.mode, "install");
     assert.equal(getAdapterPlan(provider).mode, "install");
   }

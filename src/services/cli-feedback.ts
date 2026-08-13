@@ -24,7 +24,9 @@ export const deriveCliAttribution = (input: CliFeedbackInput): CliFeedbackInput[
   }
   switch (input.tool) {
     case "codex": return "verified_active";
-    case "claude-code": return "verified_start_only";
+    case "claude-code":
+    case "qwen-code":
+    case "kimi-code": return "verified_start_only";
     case "cursor":
     case "opencode":
     case "gemini-cli":
@@ -71,7 +73,7 @@ export const resolveCliTrackedItem = async (env: Env, input: CliFeedbackInput): 
   }
 
   if (attribution === "verified_start_only") {
-    throw new HttpError(422, "model_confirmation_required", "Confirm the Claude model because it may have changed after the session started.");
+    throw new HttpError(422, "model_confirmation_required", "Confirm the model because it may have changed after the session started.");
   }
 
   const normalized = input.rawModelLabel ? normalizeModelLabel(input.rawModelLabel) : null;

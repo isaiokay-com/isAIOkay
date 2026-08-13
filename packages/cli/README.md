@@ -153,6 +153,8 @@ isaiokay run cursor -- --resume       # runs Cursor's `agent` command
 isaiokay run gemini
 isaiokay run opencode
 isaiokay run grok
+isaiokay run qwen
+isaiokay run kimi
 isaiokay run muse
 ```
 
@@ -199,8 +201,11 @@ usage, and unknown options fail instead of being silently ignored.
 
 With no arguments, `isaiokay` chooses the useful safe default. A genuinely fresh
 interactive installation starts the complete onboarding flow. After onboarding,
-it opens the one-screen rating flow only when a pending session and a valid login
-are both present; otherwise it shows the compact status screen. In pipes and CI
+it opens the one-screen rating flow only when the normal reminder policy finds a
+meaningful completed session and a valid login is present. A start-only event
+from another terminal does not make the bare command assume that provider;
+otherwise it shows the compact status screen. An explicit `isaiokay rate` can
+still rate a pending session before the automatic threshold. In pipes and CI
 it never prompts and displays machine-readable help instead. The human status
 screen also detects supported, unconfigured CLIs on `PATH` and prints the exact
 `isaiokay install <provider>` commands needed to connect them.
@@ -221,7 +226,8 @@ the stable newline-delimited machine-readable login events. `logout` revokes the
 credential remotely before deleting the local copy.
 
 After an interactive login, the CLI checks `PATH` for Codex, Claude Code,
-Cursor, OpenCode, Gemini CLI, GitHub Copilot CLI, Amp, and Grok Build. Any detected, not-yet-configured tools appear
+Cursor, OpenCode, Gemini CLI, GitHub Copilot CLI, Amp, Grok Build, Qwen Code,
+and Kimi Code. Any detected, not-yet-configured tools appear
 in an optional Space-to-toggle checklist. Only explicitly selected integrations
 are installed, and only providers with a verified automatic hook contract are
 offered. Detection never executes the discovered program. Use `--no-setup` or
@@ -240,10 +246,20 @@ nonzero when any detected integration could not be installed.
 ## Adapter installation
 
 `install` attaches verified integrations for Codex, Claude Code, Cursor, OpenCode,
-Gemini CLI, GitHub Copilot CLI, Amp, and Grok Build. Supported JSON settings are merged
+Gemini CLI, GitHub Copilot CLI, Amp, Grok Build, Qwen Code, and Kimi Code. Supported JSON settings are merged
 without removing existing hook groups; Copilot, OpenCode, Amp, and Grok Build use isolated,
 app-owned files or plugins. Malformed existing JSON causes a fail-closed error and is never
-overwritten. `uninstall` removes only handlers containing the IsAIokay.com marker.
+overwritten. Grok's file is written to `~/.grok/hooks/isaiokay.json`, or
+`$GROK_HOME/hooks/isaiokay.json` when xAI's home override is set. `uninstall`
+removes only handlers containing the IsAIokay.com marker.
+
+Qwen's owned lifecycle groups are merged into `~/.qwen/settings.json`. Kimi's
+owned `[[hooks]]` block is added to `$KIMI_CODE_HOME/config.toml` (default
+`~/.kimi-code/config.toml`) and uses silent hook output; uninstall preserves all
+unrelated TOML. Qwen and Kimi expose a start model; both keep explicit model
+confirmation because later changes are not observable from their lifecycle hooks.
+Both harnesses support third-party providers, so their confirmation screens keep
+the full eligible model catalog instead of assuming the harness vendor.
 
 Cline, Windsurf, Aider, and Muse Code remain documented manual/bridge modes where
 automatic mutation would rely on a UI-managed installation, an unpublished lifecycle API,
@@ -272,6 +288,8 @@ are not claims that every provider emits the same JSON shape.
 | Amp plugin | `agent.end` with the thread ID only | Uses Amp's native notification UI; model confirmation remains required. |
 | Aider wrapper | `event: "isaiokay.aider.model"` with `model` | Explicit wrapper/manual mode only. |
 | Grok Build hook | `SessionStart` and `Stop` with `reason: "end_turn"` | Records lifecycle activity; ignores shutdown-only Stop events and never returns a blocking decision. |
+| Qwen Code hook | `SessionStart`, `Stop`, and `SessionEnd` | Records the documented start model and lifecycle completion; confirmation remains required. |
+| Kimi Code hook | `SessionStart`, `Stop`, and `SessionEnd` | Records the documented start model with no hook output; confirmation remains required. |
 | Muse Code wrapper | foreground `muse` process | Uses generic start/end activity with explicit model confirmation. |
 
 Example Codex bridge input:

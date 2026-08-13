@@ -10,9 +10,11 @@ export {
   normalizeCursor,
   normalizeGemini,
   normalizeGrok,
+  normalizeKimi,
   normalizeMuse,
   normalizeOpenCode,
   normalizeProviderEvent,
+  normalizeQwen,
   normalizeWindsurf
 } from "./normalizers.js";
 export { decidePrompt } from "./prompt-policy.js";

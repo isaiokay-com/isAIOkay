@@ -10,6 +10,8 @@ export const PROVIDERS = [
   "aider",
   "amp",
   "grok",
+  "qwen",
+  "kimi",
   "muse"
 ] as const;
 

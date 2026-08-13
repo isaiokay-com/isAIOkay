@@ -23,6 +23,8 @@ Local configuration belongs under the platform configuration directory with user
 | Amp | Automatic isolated plugin | `agent.end` | Usually unavailable | Use native `ctx.ui.notify`; require model confirmation. |
 | Aider | Manual wrapper | Process wrapper only | Initial flag/config only | Manual confirmation because `/model` can change it. |
 | Grok Build | Automatic isolated hook | `SessionStart` plus genuine `Stop` (`reason: end_turn`) | Not retained from lifecycle input | Ignore the extra shutdown Stop and never return a gate decision. |
+| Qwen Code | Automatic merged hook | `SessionStart` plus `Stop`/`SessionEnd` | Start model only | Preselect the documented model but require confirmation because it can change later. |
+| Kimi Code | Automatic owned TOML block | `SessionStart` plus `Stop`/`SessionEnd` | Start model only | Record lifecycle activity silently; preselect and confirm the start model. |
 | Muse Code | Manual wrapper | Foreground process exit | Manual confirmation | Meta's installer verifies the `muse` command, but no stable public lifecycle hook contract is available yet. |
 
 Roo Code is intentionally excluded from new integration work because its official extension and repository were retired in 2026. Tools without a stable lifecycle API use the generic/manual adapter instead of filesystem or transcript scraping.
@@ -70,7 +72,8 @@ set `NO_COLOR` to disable color. Redirected output stays machine-readable, and
 newline-delimited JSON.
 
 After login succeeds, an interactive terminal safely checks `PATH` for Codex,
-Claude Code, Cursor, OpenCode, Gemini CLI, GitHub Copilot CLI, Amp, and Grok Build. Detected automatic integrations
+Claude Code, Cursor, OpenCode, Gemini CLI, GitHub Copilot CLI, Amp, Grok Build,
+Qwen Code, and Kimi Code. Detected automatic integrations
 that are not already configured appear in an optional checklist: use Space to
 toggle tools and Enter to install the selection. The detector checks executable
 permissions but never launches a discovered CLI. Manual/bridge-only providers
@@ -115,6 +118,8 @@ isaiokay install gemini
 isaiokay install copilot
 isaiokay install amp
 isaiokay install grok
+isaiokay install qwen
+isaiokay install kimi
 isaiokay shell install
 # PowerShell with an unusual/non-default profile:
 isaiokay shell install powershell --profile $PROFILE.CurrentUserAllHosts
@@ -122,6 +127,8 @@ isaiokay run codex
 isaiokay run claude -- --model sonnet
 isaiokay run cursor -- --resume
 isaiokay run grok
+isaiokay run qwen
+isaiokay run kimi
 isaiokay run muse
 isaiokay run <provider> --command <executable> -- <arguments...>
 isaiokay doctor
@@ -137,7 +144,7 @@ IsAIokay-owned plugin file.
 
 One-shot runners support safe foreground inspection and account commands, but
 they cannot install automatic integrations. Codex, Claude Code, Cursor, OpenCode, Gemini,
-Copilot, Amp, and Grok Build lifecycle hooks run after the one-shot process exits and therefore need
+Copilot, Amp, Grok Build, Qwen Code, and Kimi Code lifecycle hooks run after the one-shot process exits and therefore need
 a persistent `isaiokay` executable on `PATH`. A one-shot login saves the scoped
 credential, skips the integration selector, and prints the persistent install
 commands; a one-shot `install` command exits before changing provider files.
@@ -189,7 +196,7 @@ collecting a foreground session or opening a questionnaire, so pipelines,
 scripts, and output redirection keep their normal behavior.
 
 Codex, Claude Code, Cursor Agent, OpenCode, Gemini CLI, Copilot CLI, Aider, Amp,
-Grok Build, and Muse Code have default executable names. Use `--command <executable>` for any custom
+Grok Build, Qwen Code, Kimi Code, and Muse Code have default executable names. Use `--command <executable>` for any custom
 binary, renamed command, or provider without a portable terminal executable.
 Place all harness arguments after `--`; they are forwarded as an argument vector
 and are never stored or uploaded. Windows `.cmd` and `.bat` launchers use
@@ -202,12 +209,34 @@ reminder immediately, so a long-running process does not need to exit first.
 Claude Code's documented `SessionStart` model is retained for the matching
 session and preselected later; because Claude can switch models after startup,
 the developer can still correct that selection before submitting. Model choices are
-scoped to the harness when its provider is known (for example, Anthropic for
-Claude Code and OpenAI for Codex). OpenCode shows the exact observed models when
+scoped to the vendor only when the harness has a fixed provider (for example,
+Anthropic for Claude Code and OpenAI for Codex). Multi-provider harnesses such
+as Qwen Code and Kimi Code keep the full eligible catalog. OpenCode shows the exact observed models when
 they all resolve to the catalog and falls back to the broader catalog when they
 do not. If a harness exposes no safe model signal, the selector asks the
 developer to confirm it. A detached editor launcher cannot be timed by
 a process wrapper, so editor-native integrations continue to use their documented bridge.
+
+Grok Build session detection uses xAI's personal `SessionStart` and `Stop`
+hooks in `~/.grok/hooks/isaiokay.json` (or `$GROK_HOME/hooks/isaiokay.json` when
+`GROK_HOME` is set). The collector retains only an HMAC of Grok's `sessionId`
+and lifecycle timestamps; `cwd`, `workspaceRoot`, transcript content, prompts,
+and responses are discarded. Because Grok's documented lifecycle envelope does
+not identify the active model, the rating flow asks for confirmation and limits
+the choices to current xAI models.
+
+Qwen Code merges owned `SessionStart`, `Stop`, and `SessionEnd` groups into
+`~/.qwen/settings.json`. Its documented start envelope includes `model`, which
+is retained only as a safe identifier and presented as the default selection;
+the developer still confirms it because the model can change during a session.
+
+Kimi Code adds a clearly marked `[[hooks]]` block to
+`$KIMI_CODE_HOME/config.toml` (default `~/.kimi-code/config.toml`). The hook runs
+in silent mode so it cannot append output to Kimi's context. Kimi's documented
+`SessionStart` envelope includes `model`, so the rating flow preselects a known
+catalog match while leaving third-party models available, then asks the
+developer to confirm it. Uninstall removes only the
+marked block.
 
 Shell integration is opt-in and fail-closed: malformed or duplicate managed
 markers are never overwritten. Existing startup content and file permissions
@@ -250,9 +279,12 @@ execution never prompts; automation can use `--result-quality`,
 On either rating step, pressing `1` through `5` selects that score directly.
 
 Running `isaiokay` without a subcommand starts onboarding on a fresh interactive
-installation. Once onboarding is complete, it starts the rating flow when a
-signed-in pending session exists; if nothing is ready to rate, it shows status
-and the next useful command. A non-interactive empty invocation prints help and
+installation. Once onboarding is complete, it starts the rating flow only when
+the normal reminder policy identifies a meaningful completed session. A
+start-only event from another terminal never makes a bare command assume that
+provider; if nothing is ready to rate, it shows status and the next useful
+command. An explicit `isaiokay rate` can still rate a pending session before the
+automatic reminder threshold. A non-interactive empty invocation prints help and
 never prompts. Status checks supported executables on `PATH`; detected tools
 without an installed integration are listed with their exact installation
 commands.
@@ -272,7 +304,7 @@ install, refresh, or reload command.
 
 The repository installer requires Node 22+, downloads the selected public GitHub source archive into a temporary directory, installs locked dependencies with lifecycle scripts disabled, builds only the CLI, and installs that local package globally. Set `ISAIOKAY_REF` to pin a tag or commit.
 
-Codex, Claude Code, Cursor, and Gemini CLI use carefully merged lifecycle hook groups. OpenCode, Copilot, Amp, and Grok Build use isolated app-owned files or plugins. Existing valid configuration is preserved, malformed JSON fails closed, and uninstall removes only IsAIokay.com-owned entries. Cline, Windsurf, Aider, and Muse Code return explicit manual bridge or wrapper instructions because their safest integration requires an editor-specific UI workflow, debounce layer, process wrapper, or a lifecycle API that is not yet public.
+Codex, Claude Code, Cursor, Gemini CLI, and Qwen Code use carefully merged lifecycle hook groups. OpenCode, Copilot, Amp, and Grok Build use isolated app-owned files or plugins. Kimi Code uses a clearly marked TOML block. Existing configuration is preserved, malformed JSON or managed markers fail closed, and uninstall removes only IsAIokay.com-owned entries. Cline, Windsurf, Aider, and Muse Code return explicit manual bridge or wrapper instructions because their safest integration requires an editor-specific UI workflow, debounce layer, process wrapper, or a lifecycle API that is not yet public.
 
 ## Attribution and scoring
 
@@ -298,6 +330,8 @@ The initial model catalog and aliases are intentionally conservative and sourced
 - [Claude Code hooks](https://code.claude.com/docs/en/hooks)
 - [Cursor hooks](https://cursor.com/docs/hooks) and [CLI output](https://docs.cursor.com/en/cli/reference/output-format)
 - [Grok Build overview](https://docs.x.ai/build/overview), [hooks](https://docs.x.ai/build/features/hooks), and [CLI reference](https://docs.x.ai/build/cli/reference)
+- [Qwen Code settings](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/settings/) and [hooks](https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/)
+- [Kimi Code configuration](https://www.kimi.com/code/docs/en/kimi-code-cli/configuration/config-files) and [hooks](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/hooks.html)
 - [Muse Code official installer](https://dev.meta.ai/install.sh)
 - [OpenCode plugins](https://opencode.ai/docs/plugins/)
 - [Gemini CLI hook reference](https://geminicli.com/docs/hooks/reference/)
