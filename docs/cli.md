@@ -130,6 +130,11 @@ isaiokay prompt
 isaiokay rate
 ```
 
+The OpenCode integration is a generated local plugin. After upgrading the CLI,
+run `isaiokay install opencode` again and restart OpenCode so the installed
+plugin uses the new event-handling logic. The command replaces only the
+IsAIokay-owned plugin file.
+
 One-shot runners support safe foreground inspection and account commands, but
 they cannot install automatic integrations. Codex, Claude Code, Cursor, OpenCode, Gemini,
 Copilot, Amp, and Grok Build lifecycle hooks run after the one-shot process exits and therefore need
@@ -196,11 +201,12 @@ its hooks join the foreground session. A safe post-turn hook may show the daily
 reminder immediately, so a long-running process does not need to exit first.
 Claude Code's documented `SessionStart` model is retained for the matching
 session and preselected later; because Claude can switch models after startup,
-the developer can still correct that row before submitting. Model choices are
+the developer can still correct that selection before submitting. Model choices are
 scoped to the harness when its provider is known (for example, Anthropic for
-Claude Code and OpenAI for Codex). Multi-provider routers such as OpenCode keep
-the broader catalog. If a harness exposes no safe model signal, the same row
-asks the developer to confirm it. A detached editor launcher cannot be timed by
+Claude Code and OpenAI for Codex). OpenCode shows the exact observed models when
+they all resolve to the catalog and falls back to the broader catalog when they
+do not. If a harness exposes no safe model signal, the selector asks the
+developer to confirm it. A detached editor launcher cannot be timed by
 a process wrapper, so editor-native integrations continue to use their documented bridge.
 
 Shell integration is opt-in and fail-closed: malformed or duplicate managed
@@ -208,19 +214,31 @@ markers are never overwritten. Existing startup content and file permissions
 are preserved, harness arguments remain a distinct argument vector, and
 the original harness exit status is returned unchanged.
 
-`isaiokay rate` is a zero-typing, one-screen flow in an interactive terminal:
+`isaiokay rate` is a zero-typing vertical flow in an interactive terminal:
 
 ```text
-? Quick check-in
-  ❯ Model                               ‹ Claude Sonnet 5 (Anthropic) ›
-    How good was the result?            ‹ 3 — Okay ›
-    Did progress feel worth the usage?  ‹ 3 — About expected ›
-  ↑/↓ field · ←/→ change · 1–5 rate · Enter send · Esc skip today
+? Quick check-in 1/3
+  Model
+    Claude Fable 5 (Anthropic)
+  ❯ Claude Sonnet 5 (Anthropic)
+    Claude Opus 5 (Anthropic)
+  ↑/↓ choose · Enter next · Esc skip today
+
+? Quick check-in 2/3
+  How good was the result?
+    5 — Completed as requested
+  ❯ 4 — Completed with minor fixes
+    3 — Partly useful
+    2 — Needed major rework
+    1 — Unusable
+  ↑/↓ choose · 1–5 jump · Enter next · ← back · Esc skip today
 ```
 
-The interactive flow keeps the model on this same screen and starts on an exact
-catalog match when one was observed. Provider-specific harnesses show only that
-provider's models; multi-provider tools keep the broader catalog. Result quality captures whether the
+The interactive flow starts on an exact catalog match when one was observed.
+Provider-specific harnesses show only that provider's models. A mixed OpenCode
+session shows only the models observed in that session when every identifier has
+an exact catalog match; otherwise its broader catalog remains available for a
+safe manual correction. Result quality captures whether the
 session produced a useful, correct outcome. Usage efficiency captures whether
 that progress felt worth the subscription allowance or metered usage consumed. The
 CLI does not ask developers to estimate comparison, task type, or recency:
@@ -229,7 +247,7 @@ unspecified, and session timing supplies recency. The flow never asks for typed
 text. Optional tags and comments are advanced flag-only fields. Piped or CI
 execution never prompts; automation can use `--result-quality`,
 `--usage-efficiency`, and `--item`, and can request JSON output.
-On either rating row, pressing `1` through `5` selects that score directly.
+On either rating step, pressing `1` through `5` selects that score directly.
 
 Running `isaiokay` without a subcommand starts onboarding on a fresh interactive
 installation. Once onboarding is complete, it starts the rating flow when a

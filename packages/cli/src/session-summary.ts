@@ -2,6 +2,7 @@ import type { Provider, StoredEvent } from "./types.js";
 
 export interface SessionSummary {
   orderedEvents: StoredEvent[];
+  models: string[];
   model: string | null;
   mixed: boolean;
   attributionEvent: StoredEvent;
@@ -21,6 +22,7 @@ export const summarizeSession = (events: StoredEvent[], provider: Provider): Ses
     : [...orderedEvents].reverse().find((event) => event.model !== null) ?? orderedEvents.at(-1)!;
   return {
     orderedEvents,
+    models,
     model: mixed || opaqueActive ? null : models[0] ?? orderedEvents.at(-1)!.model,
     mixed,
     attributionEvent

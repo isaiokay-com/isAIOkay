@@ -25,7 +25,7 @@ interface MultiMenuOptions {
 }
 
 type TtyInput = NodeJS.ReadStream & { isRaw?: boolean };
-type TtyOutput = NodeJS.WriteStream & { columns?: number };
+type TtyOutput = NodeJS.WriteStream & { columns?: number; rows?: number };
 
 const ansi = (enabled: boolean, open: string, close: string, text: string): string =>
   enabled ? `${open}${text}${close}` : text;
@@ -145,8 +145,8 @@ export const createTerminalForm = (input: TtyInput, output: TtyOutput) => async 
   if (fields.length === 0) return {};
   const color = options.color === true;
   const indexes = fields.map((field) => Math.max(0, field.choices.findIndex((choice) => choice.value === field.initialValue)));
-  const renderedRows = fields.length + 2;
-  let active = 0;
+  let activeField = 0;
+  let renderedRows = 0;
   let rendered = false;
   const wasRaw = input.isRaw === true;
   const wasFlowing = input.readableFlowing;
@@ -157,21 +157,34 @@ export const createTerminalForm = (input: TtyInput, output: TtyOutput) => async 
     };
     const render = (): void => {
       clear();
+      const field = fields[activeField];
+      if (!field) return;
       const terminalWidth = Math.max(40, output.columns ?? 80);
-      const longestLabel = Math.max(...fields.map((field) => field.label.length));
-      const labelWidth = Math.min(longestLabel, Math.max(12, Math.floor((terminalWidth - 9) * 0.48)));
-      const maxValueWidth = Math.max(12, terminalWidth - labelWidth - 9);
-      output.write(`${ansi(color, "\u001b[36m", "\u001b[39m", "?")} ${ansi(color, "\u001b[1m", "\u001b[22m", title)}\n`);
-      for (let index = 0; index < fields.length; index += 1) {
-        const field = fields[index];
-        if (!field) continue;
-        const choice = field.choices[indexes[index] ?? 0];
-        const pointer = index === active ? ansi(color, "\u001b[36m", "\u001b[39m", "❯") : " ";
-        const label = truncate(field.label, labelWidth).padEnd(labelWidth);
-        const value = truncate(choice?.label ?? "", maxValueWidth);
-        output.write(`  ${pointer} ${index === active ? ansi(color, "\u001b[1m", "\u001b[22m", label) : label}  ${ansi(color, "\u001b[36m", "\u001b[39m", `‹ ${value} ›`)}\n`);
+      const maxWidth = Math.max(24, terminalWidth - 7);
+      const visibleCount = Math.min(Math.max(5, (output.rows ?? 16) - 6), field.choices.length);
+      const activeChoice = indexes[activeField] ?? 0;
+      const start = Math.min(Math.max(0, activeChoice - Math.floor(visibleCount / 2)), field.choices.length - visibleCount);
+      const visible = field.choices.slice(start, start + visibleCount);
+      const step = fields.length > 1 ? ` ${activeField + 1}/${fields.length}` : "";
+      output.write(`${ansi(color, "\u001b[36m", "\u001b[39m", "?")} ${ansi(color, "\u001b[1m", "\u001b[22m", title)}${ansi(color, "\u001b[2m", "\u001b[22m", step)}\n`);
+      output.write(`  ${ansi(color, "\u001b[1m", "\u001b[22m", field.label)}\n`);
+      for (let offset = 0; offset < visible.length; offset += 1) {
+        const index = start + offset;
+        const choice = visible[offset];
+        if (!choice) continue;
+        const pointer = index === activeChoice ? ansi(color, "\u001b[36m", "\u001b[39m", "❯") : " ";
+        const detail = choice.hint ? `${choice.label} — ${choice.hint}` : choice.label;
+        const label = index === activeChoice
+          ? ansi(color, "\u001b[1m", "\u001b[22m", truncate(detail, maxWidth))
+          : truncate(detail, maxWidth);
+        output.write(`  ${pointer} ${label}\n`);
       }
-      output.write(`  ${ansi(color, "\u001b[2m", "\u001b[22m", `↑/↓ field · ←/→ change · 1–5 rate · Enter ${options.submitLabel ?? "continue"} · Esc ${options.cancelLabel ?? "cancel"}`)}\n`);
+      const position = field.choices.length > visibleCount ? ` · ${activeChoice + 1}/${field.choices.length}` : "";
+      const hasRatingHotkeys = field.choices.some((choice) => /^[1-5]$/u.test(choice.value));
+      const enterLabel = activeField === fields.length - 1 ? options.submitLabel ?? "submit" : "next";
+      const backLabel = activeField > 0 ? " · ← back" : "";
+      output.write(`  ${ansi(color, "\u001b[2m", "\u001b[22m", `↑/↓ choose${hasRatingHotkeys ? " · 1–5 jump" : ""} · Enter ${enterLabel}${backLabel} · Esc ${options.cancelLabel ?? "cancel"}${position}`)}\n`);
+      renderedRows = visible.length + 3;
       rendered = true;
     };
     const finish = (value: Record<string, string> | undefined): void => {
@@ -188,18 +201,24 @@ export const createTerminalForm = (input: TtyInput, output: TtyOutput) => async 
         finish(undefined);
         return;
       }
-      if (key.name === "up" || key.name === "k") active = (active - 1 + fields.length) % fields.length;
-      else if (key.name === "down" || key.name === "j") active = (active + 1) % fields.length;
+      const choices = fields[activeField]?.choices ?? [];
+      if (key.name === "up" || key.name === "k") indexes[activeField] = ((indexes[activeField] ?? 0) - 1 + choices.length) % choices.length;
+      else if (key.name === "down" || key.name === "j") indexes[activeField] = ((indexes[activeField] ?? 0) + 1) % choices.length;
+      else if (key.name === "home") indexes[activeField] = 0;
+      else if (key.name === "end") indexes[activeField] = choices.length - 1;
       else if (/^[1-5]$/u.test(_text) || /^[1-5]$/u.test(key.name ?? "")) {
         const directValue = /^[1-5]$/u.test(_text) ? _text : key.name ?? "";
-        const directIndex = fields[active]?.choices.findIndex((choice) => choice.value === directValue) ?? -1;
+        const directIndex = choices.findIndex((choice) => choice.value === directValue);
         if (directIndex === -1) return;
-        indexes[active] = directIndex;
-      } else if (key.name === "left" || key.name === "h" || key.name === "right" || key.name === "l") {
-        const choices = fields[active]?.choices ?? [];
-        const direction = key.name === "left" || key.name === "h" ? -1 : 1;
-        indexes[active] = ((indexes[active] ?? 0) + direction + choices.length) % choices.length;
+        indexes[activeField] = directIndex;
+      } else if ((key.name === "left" || key.name === "h" || key.name === "backspace") && activeField > 0) {
+        activeField -= 1;
       } else if (key.name === "return" || key.name === "enter") {
+        if (activeField < fields.length - 1) {
+          activeField += 1;
+          render();
+          return;
+        }
         const result = Object.fromEntries(fields.flatMap((field, index) => {
           const value = field.choices[indexes[index] ?? 0]?.value;
           return value === undefined ? [] : [[field.name, value]];

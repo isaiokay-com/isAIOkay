@@ -39,4 +39,5 @@ test("multiple explicitly observed models are marked mixed", () => {
   ], "cursor");
   assert.equal(summary.mixed, true);
   assert.equal(summary.model, null);
+  assert.deepEqual(summary.models, ["claude-sonnet-5", "gpt-5.6-sol"]);
 });

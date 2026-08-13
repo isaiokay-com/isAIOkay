@@ -33,7 +33,7 @@ test("terminal menu pauses an initially non-flowing TTY after selection", async 
   assert.equal(input.readableFlowing, false);
 });
 
-test("terminal form supports arrow-key selection and restores terminal state", async () => {
+test("terminal form presents each field as a vertical arrow-key selector and restores terminal state", async () => {
   const input = new FakeInput();
   let output = "";
   const writer = { columns: 80, write: (chunk: string): boolean => { output += chunk; return true; } };
@@ -47,16 +47,20 @@ test("terminal form supports arrow-key selection and restores terminal state", a
     ] }
   ], { submitLabel: "continue" });
 
-  input.emit("keypress", "", { name: "right" });
   input.emit("keypress", "", { name: "down" });
-  input.emit("keypress", "", { name: "left" });
+  input.emit("keypress", "", { name: "return" });
+  input.emit("keypress", "", { name: "up" });
   input.emit("keypress", "", { name: "return" });
 
   assert.deepEqual(await resultPromise, { quality: "4", speed: "2" });
   assert.equal(input.isRaw, false);
   assert.equal(input.isPaused(), true);
   assert.match(output, /Rate this session/);
-  assert.match(output, /←\/→ change/);
+  assert.match(output, /↑\/↓ choose/);
+  assert.match(output, /1\/2/);
+  assert.match(output, /2 — Poor\n/);
+  assert.match(output, /3 — Neutral\n/);
+  assert.match(output, /4 — Good\n/);
   assert.match(output, /\u001b\[\?25h/);
 });
 
@@ -72,10 +76,27 @@ test("terminal form supports direct 1–5 rating hotkeys", async () => {
   ]);
 
   input.emit("keypress", "5", { name: "5" });
-  input.emit("keypress", "", { name: "down" });
+  input.emit("keypress", "", { name: "return" });
   input.emit("keypress", "1", { name: "1" });
   input.emit("keypress", "", { name: "return" });
 
   assert.deepEqual(await resultPromise, { quality: "5", speed: "1" });
-  assert.match(output, /1–5 rate/);
+  assert.match(output, /1–5 jump/);
+});
+
+test("terminal form scrolls a long model catalog vertically within the terminal height", async () => {
+  const input = new FakeInput();
+  let output = "";
+  const writer = { columns: 80, rows: 10, write: (chunk: string): boolean => { output += chunk; return true; } };
+  const form = createTerminalForm(input as unknown as NodeJS.ReadStream, writer as unknown as NodeJS.WriteStream);
+  const choices = Array.from({ length: 12 }, (_, index) => ({ value: `model-${index + 1}`, label: `Model ${index + 1}` }));
+  const resultPromise = form("Quick check-in", [{ name: "item", label: "Model", choices }]);
+
+  for (let index = 0; index < 6; index += 1) input.emit("keypress", "", { name: "down" });
+  input.emit("keypress", "", { name: "return" });
+
+  assert.deepEqual(await resultPromise, { item: "model-7" });
+  assert.match(output, /7\/12/);
+  assert.match(output, /❯ Model 7/);
+  assert.doesNotMatch(output, /‹|›/);
 });

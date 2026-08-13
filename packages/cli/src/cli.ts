@@ -262,7 +262,7 @@ const detectSetupProviders = async (
 const COMMAND_HELP: Record<string, { summary: string; usage: string[]; notes?: string[] }> = {
   setup: { summary: "Sign in and connect detected coding tools.", usage: ["isaiokay", "isaiokay setup", "isaiokay setup --headless"], notes: ["A fresh interactive installation starts this flow when you run `isaiokay` with no arguments."] },
   login: { summary: "Sign in with a short-lived browser code.", usage: ["isaiokay login", "isaiokay login --headless", "isaiokay login --no-setup", "isaiokay login --json"] },
-  rate: { summary: "Rate the most recent eligible AI coding session.", usage: ["isaiokay rate", "isaiokay rate submit --result-quality 4 --usage-efficiency 3 --item <slug>", "isaiokay rate show", "isaiokay rate defer <seconds>"], notes: ["Interactive ratings use one keyboard-driven screen and require no typing. Press 1–5 on a rating row; Esc skips today without submitting."] },
+  rate: { summary: "Rate the most recent eligible AI coding session.", usage: ["isaiokay rate", "isaiokay rate submit --result-quality 4 --usage-efficiency 3 --item <slug>", "isaiokay rate show", "isaiokay rate defer <seconds>"], notes: ["Interactive ratings use vertical keyboard selectors and require no typing. Use ↑/↓ to choose, Enter to continue, or 1–5 to jump to a rating; Esc skips today without submitting."] },
   status: { summary: "Show authentication, integrations, shell activation, and check-in readiness.", usage: ["isaiokay status", "isaiokay status --json"] },
   doctor: { summary: "Check provider integrations and shell activation.", usage: ["isaiokay doctor", "isaiokay doctor codex"] },
   install: { summary: "Install one provider or every detected automatic integration.", usage: ["isaiokay install --all", "isaiokay install codex"] },
@@ -1226,19 +1226,19 @@ const durationBucket = (events: StoredEvent[]): string => {
 class CliCancelledError extends Error {}
 
 const RESULT_QUALITY_CHOICES: readonly TerminalChoice[] = [
-  { value: "5", label: "5 — Excellent" },
-  { value: "4", label: "4 — Good" },
-  { value: "3", label: "3 — Okay" },
-  { value: "2", label: "2 — Poor" },
+  { value: "5", label: "5 — Completed as requested" },
+  { value: "4", label: "4 — Completed with minor fixes" },
+  { value: "3", label: "3 — Partly useful" },
+  { value: "2", label: "2 — Needed major rework" },
   { value: "1", label: "1 — Unusable" }
 ];
 
 const USAGE_EFFICIENCY_CHOICES: readonly TerminalChoice[] = [
-  { value: "5", label: "5 — Very efficient" },
+  { value: "5", label: "5 — Exceptionally efficient" },
   { value: "4", label: "4 — Efficient" },
   { value: "3", label: "3 — About expected" },
-  { value: "2", label: "2 — Heavy" },
-  { value: "1", label: "1 — Burned too fast" }
+  { value: "2", label: "2 — Too much usage for the result" },
+  { value: "1", label: "1 — Mostly wasted usage" }
 ];
 
 const MODEL_PROVIDER_BY_HARNESS: Partial<Record<Provider, string>> = {
@@ -1328,7 +1328,7 @@ const runRateSubmit = async (
   const sessionEvents = selected.sessionHash
     ? pending.filter((event) => event.provider === selected.provider && event.sessionHash === selected.sessionHash)
     : [selected];
-  const { model, mixed, attributionEvent } = summarizeSession(sessionEvents, selected.provider);
+  const { model, models, mixed, attributionEvent } = summarizeSession(sessionEvents, selected.provider);
 
   const humanOutput = loginUsesHumanOutput(parsed, io);
   const style = loginStyles(parsed, io);
@@ -1336,7 +1336,7 @@ const runRateSubmit = async (
     io.stdout.write(`\n  ${style.bold(style.cyan("Rate this session"))}\n`);
     io.stdout.write(`  ${style.dim(`${selected.provider} · ${model ?? "Model confirmation needed"}`)}\n`);
     io.stdout.write(`  ${style.dim("Your prompts, code, transcripts, repositories, paths, and raw session ID are never sent.")}\n\n`);
-    if (io.form) io.stdout.write(`  ${style.dim("Two quick ratings. Use ↑/↓ for rows, 1–5 to rate, and Enter to submit.")}\n\n`);
+    if (io.form) io.stdout.write(`  ${style.dim("Choose from each vertical list with ↑/↓ and Enter. Press 1–5 to jump to a rating.")}\n\n`);
   }
 
   const suppliedRatings = {
@@ -1365,7 +1365,18 @@ const runRateSubmit = async (
     try {
       const items = providerAwareModelCatalog(await getTrackedItems(fetcherFor(io), credential), selected.provider);
       detectedItemSlug = detectedCatalogSlug(items, model);
-      modelChoices = items.map((item) => ({ value: item.slug, label: `${item.name} (${item.providerName})` }));
+      const observedSlugs = models.flatMap((observedModel) => {
+        const slug = detectedCatalogSlug(items, observedModel);
+        return slug === undefined ? [] : [slug];
+      });
+      const uniqueObservedSlugs = [...new Set(observedSlugs)];
+      const visibleItems = mixed && observedSlugs.length === models.length
+        ? uniqueObservedSlugs.flatMap((slug) => {
+            const item = items.find((candidate) => candidate.slug === slug);
+            return item === undefined ? [] : [item];
+          })
+        : items;
+      modelChoices = visibleItems.map((item) => ({ value: item.slug, label: `${item.name} (${item.providerName})` }));
       if (modelChoices.length === 0) {
         writeCommandError(parsed, io, "model_catalog_empty");
         return 1;

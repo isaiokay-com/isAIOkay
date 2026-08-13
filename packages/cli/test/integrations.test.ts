@@ -45,6 +45,63 @@ test("isolated OpenCode, Copilot, and Amp integrations contain no credential or 
   await uninstallOwnedIntegration("amp", home);
 });
 
+test("OpenCode groups deduplicated root and subagent models into one safe idle envelope", async (context) => {
+  const home = await mkdtemp(join(tmpdir(), "isaiokay-integrations-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const installed = await installOwnedIntegration("opencode", home);
+  const source = await readFile(installed.path!, "utf8");
+  const payloads: Array<Record<string, unknown>> = [];
+  const runtime = globalThis as typeof globalThis & { Bun?: { spawn: (command: string[], options: { stdin: string }) => unknown } };
+  const previousBun = runtime.Bun;
+  runtime.Bun = {
+    spawn: (_command, options) => {
+      payloads.push(JSON.parse(options.stdin) as Record<string, unknown>);
+      return { stdout: new Blob(["{}"]).stream(), exited: Promise.resolve(0) };
+    }
+  };
+  context.after(() => {
+    if (previousBun === undefined) delete runtime.Bun;
+    else runtime.Bun = previousBun;
+  });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+  const pluginModule = await import(moduleUrl) as { IsAiOkay: (input: unknown) => Promise<{ event: (input: unknown) => Promise<void> }> };
+  const plugin = await pluginModule.IsAiOkay({ client: { tui: { showToast: async () => undefined } } });
+
+  await plugin.event({ event: { type: "session.created", properties: { info: { id: "root-session" } } } });
+  await plugin.event({ event: { type: "session.created", properties: { info: { id: "child-session", parentID: "root-session" } } } });
+  await plugin.event({ event: { type: "session.updated", properties: { info: { id: "child-session" } } } });
+  const rootMessage = {
+    type: "message.updated",
+    properties: { info: { id: "root-message", sessionID: "root-session", role: "assistant", providerID: "opencode-go", modelID: "stale-model" } }
+  };
+  await plugin.event({ event: rootMessage });
+  await plugin.event({ event: {
+    type: "message.updated",
+    properties: { info: { ...rootMessage.properties.info, modelID: "kimi-k3" } }
+  } });
+  await plugin.event({ event: {
+    type: "message.updated",
+    properties: { info: { id: "summary-message", sessionID: "root-session", role: "assistant", providerID: "internal", modelID: "summary-model", summary: true } }
+  } });
+  await plugin.event({ event: {
+    type: "message.updated",
+    properties: { info: { id: "child-message", sessionID: "child-session", role: "assistant", providerID: "opencode-go", modelID: "deepseek-v4-pro" } }
+  } });
+  await plugin.event({ event: { type: "session.idle", properties: { sessionID: "child-session" } } });
+  assert.deepEqual(payloads, []);
+
+  await plugin.event({ event: { type: "session.idle", properties: { sessionID: "root-session" } } });
+  assert.deepEqual(payloads, [
+    { event: "isaiokay.opencode.model", sessionID: "root-session", providerID: "opencode-go", modelID: "kimi-k3" },
+    { event: "isaiokay.opencode.model", sessionID: "root-session", providerID: "opencode-go", modelID: "deepseek-v4-pro" },
+    { event: "session.idle", sessionID: "root-session" }
+  ]);
+  assert.equal(JSON.stringify(payloads).includes("stale-model"), false);
+  assert.equal(JSON.stringify(payloads).includes("summary-model"), false);
+  assert.equal(JSON.stringify(payloads).includes("root-message"), false);
+  assert.equal(JSON.stringify(payloads).includes("child-message"), false);
+});
+
 test("Gemini installation preserves existing settings and removes only owned hooks", async (context) => {
   const home = await mkdtemp(join(tmpdir(), "isaiokay-integrations-"));
   context.after(() => rm(home, { recursive: true, force: true }));

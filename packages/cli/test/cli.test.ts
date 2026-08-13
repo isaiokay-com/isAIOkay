@@ -1147,6 +1147,144 @@ test("Claude's SessionStart model is preselected from an Anthropic-only catalog"
   assert.match(feedbackBody, /"attribution":"user_confirmed"/);
 });
 
+test("a mixed OpenCode session offers only the models actually observed", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const now = 1_800_000_000_000;
+  const store = new LocalStore(resolveStoragePaths({ home: directory, env: {} }));
+  await store.saveCredential({
+    schemaVersion: 1,
+    serverUrl: "https://isaiokay.com",
+    accessToken: `iai_${"a".repeat(64)}`,
+    expiresAt: now + 60_000
+  });
+  const sessionHash = "s".repeat(43);
+  await store.recordEvents([
+    {
+      schemaVersion: 1,
+      id: "00000000-0000-4000-8000-000000000301",
+      provider: "opencode",
+      attribution: "documented_model",
+      model: "opencode-go/kimi-k3",
+      sessionHash,
+      occurredAt: now - 1_000,
+      recordedAt: now - 1_000
+    },
+    {
+      schemaVersion: 1,
+      id: "00000000-0000-4000-8000-000000000302",
+      provider: "opencode",
+      attribution: "documented_model",
+      model: "opencode-go/deepseek-v4-pro",
+      sessionHash,
+      occurredAt: now,
+      recordedAt: now
+    }
+  ]);
+
+  let feedbackBody = "";
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/cli/items")) return Response.json({ items: [
+      { id: "2", slug: "deepseek-v4-pro", name: "DeepSeek V4 Pro", providerName: "DeepSeek", type: "model" },
+      { id: "1", slug: "kimi-k3", name: "Kimi K3", providerName: "Moonshot AI", type: "model" },
+      { id: "3", slug: "gpt-5-6-sol", name: "GPT-5.6 Sol", providerName: "OpenAI", type: "model" }
+    ] });
+    if (url.endsWith("/api/cli/feedback")) {
+      feedbackBody = typeof init?.body === "string" ? init.body : "";
+      return Response.json({ accepted: true, reportId: "report-id" }, { status: 201 });
+    }
+    return Response.json({ error: { code: "unexpected", message: "Unexpected request" } }, { status: 500 });
+  };
+  const rating = capturedIo("", {
+    fetch: fetcher,
+    home: directory,
+    now: () => now,
+    env: { TERM: "xterm-256color" },
+    form: async (title, fields) => {
+      assert.equal(title, "Quick check-in");
+      const modelField = fields[0];
+      assert.equal(modelField?.name, "item");
+      assert.equal(modelField?.initialValue, undefined);
+      assert.deepEqual(modelField?.choices.map((choice) => choice.value), ["kimi-k3", "deepseek-v4-pro"]);
+      assert.deepEqual(fields[1]?.choices.map((choice) => choice.label), [
+        "5 — Completed as requested",
+        "4 — Completed with minor fixes",
+        "3 — Partly useful",
+        "2 — Needed major rework",
+        "1 — Unusable"
+      ]);
+      assert.equal(fields[2]?.choices[0]?.label, "5 — Exceptionally efficient");
+      assert.equal(fields[2]?.choices.at(-1)?.label, "1 — Mostly wasted usage");
+      return { item: "deepseek-v4-pro", resultQuality: "4", usageEfficiency: "3" };
+    }
+  }, true);
+
+  assert.equal(await runCli(["rate", "submit"], rating.io), 0);
+  assert.match(feedbackBody, /"confirmedItemSlug":"deepseek-v4-pro"/);
+  assert.doesNotMatch(feedbackBody, /gpt-5-6-sol/);
+});
+
+test("a final opaque Cursor Auto state never preselects an earlier explicit model", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const now = 1_800_000_000_000;
+  const store = new LocalStore(resolveStoragePaths({ home: directory, env: {} }));
+  await store.saveCredential({
+    schemaVersion: 1,
+    serverUrl: "https://isaiokay.com",
+    accessToken: `iai_${"a".repeat(64)}`,
+    expiresAt: now + 60_000
+  });
+  const sessionHash = "c".repeat(43);
+  await store.recordEvents([
+    {
+      schemaVersion: 1,
+      id: "00000000-0000-4000-8000-000000000303",
+      provider: "cursor",
+      attribution: "explicit_model",
+      model: "claude-sonnet-5",
+      sessionHash,
+      occurredAt: now - 1_000,
+      recordedAt: now - 1_000
+    },
+    {
+      schemaVersion: 1,
+      id: "00000000-0000-4000-8000-000000000304",
+      provider: "cursor",
+      attribution: "opaque_auto",
+      model: null,
+      sessionHash,
+      occurredAt: now,
+      recordedAt: now
+    }
+  ]);
+
+  const fetcher: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/api/cli/items")) return Response.json({ items: [
+      { id: "1", slug: "claude-sonnet-5", name: "Claude Sonnet 5", providerName: "Anthropic", type: "model" },
+      { id: "2", slug: "gpt-5-6-sol", name: "GPT-5.6 Sol", providerName: "OpenAI", type: "model" }
+    ] });
+    if (url.endsWith("/api/cli/feedback")) return Response.json({ accepted: true, reportId: "report-id" }, { status: 201 });
+    return Response.json({ error: { code: "unexpected", message: "Unexpected request" } }, { status: 500 });
+  };
+  const rating = capturedIo("", {
+    fetch: fetcher,
+    home: directory,
+    now: () => now,
+    env: { TERM: "xterm-256color" },
+    form: async (_title, fields) => {
+      assert.equal(fields[0]?.name, "item");
+      assert.equal(fields[0]?.initialValue, undefined);
+      assert.deepEqual(fields[0]?.choices.map((choice) => choice.value), ["claude-sonnet-5", "gpt-5-6-sol"]);
+      return { item: "claude-sonnet-5", resultQuality: "3", usageEfficiency: "3" };
+    }
+  }, true);
+
+  assert.equal(await runCli(["rate", "submit"], rating.io), 0);
+});
+
 test("Esc skips a direct check-in until the next local day", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
   context.after(() => rm(directory, { recursive: true, force: true }));

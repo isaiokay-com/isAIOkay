@@ -120,7 +120,17 @@ const mergeGeminiHooks = async (
 
 const openCodePlugin = (executable: string): string => `// Installed by isaiokay. Contains no credential and performs no network request.
 export const IsAiOkay = async ({ client }) => {
-  const models = new Map();
+  const messages = new Map();
+  const parents = new Map();
+  const rootSession = (sessionID) => {
+    const visited = new Set();
+    let current = sessionID;
+    while (parents.has(current) && !visited.has(current)) {
+      visited.add(current);
+      current = parents.get(current);
+    }
+    return current;
+  };
   const invoke = async (payload) => {
     const child = Bun.spawn(${JSON.stringify([executable, "hook", "--provider", "opencode", "--quiet"])}, {
       stdin: JSON.stringify(payload), stdout: "pipe", stderr: "ignore"
@@ -133,19 +143,54 @@ export const IsAiOkay = async ({ client }) => {
   return {
     event: async ({ event }) => {
       try {
+        if (event?.type === "session.created" || event?.type === "session.updated") {
+          const info = event.properties?.info;
+          if (typeof info?.id === "string") {
+            if (typeof info.parentID === "string") parents.set(info.id, info.parentID);
+          }
+          return;
+        }
         if (event?.type === "message.updated") {
           const info = event.properties?.info;
-          if (info?.role === "assistant" && typeof info.sessionID === "string") {
-            models.set(info.sessionID, { providerID: info.providerID, modelID: info.modelID });
+          if (
+            info?.role === "assistant" && info.summary !== true &&
+            typeof info.id === "string" && typeof info.sessionID === "string" &&
+            typeof info.providerID === "string" && typeof info.modelID === "string"
+          ) {
+            const sessionMessages = messages.get(info.sessionID) || new Map();
+            sessionMessages.set(info.id, { providerID: info.providerID, modelID: info.modelID });
+            messages.set(info.sessionID, sessionMessages);
+          }
+          return;
+        }
+        if (event?.type === "session.deleted") {
+          const sessionID = event.properties?.info?.id;
+          if (typeof sessionID === "string") {
+            messages.delete(sessionID);
+            parents.delete(sessionID);
           }
           return;
         }
         if (event?.type !== "session.idle") return;
         const sessionID = event.properties?.sessionID;
         if (typeof sessionID !== "string") return;
-        const model = models.get(sessionID) || {};
-        models.delete(sessionID);
-        await invoke({ event: "session.idle", sessionID, ...model });
+        if (rootSession(sessionID) !== sessionID) return;
+        const relatedSessions = [...new Set([...messages.keys(), ...parents.keys()])]
+          .filter((candidate) => rootSession(candidate) === sessionID);
+        const observed = new Map();
+        for (const relatedSession of relatedSessions) {
+          for (const model of messages.get(relatedSession)?.values() || []) {
+            observed.set(model.providerID + "/" + model.modelID, model);
+          }
+        }
+        for (const model of observed.values()) {
+          await invoke({ event: "isaiokay.opencode.model", sessionID, ...model });
+        }
+        await invoke({ event: "session.idle", sessionID });
+        for (const relatedSession of relatedSessions) {
+          messages.delete(relatedSession);
+          parents.delete(relatedSession);
+        }
       } catch {}
     }
   };
