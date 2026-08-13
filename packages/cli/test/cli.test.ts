@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
 import { detectBrowserAvailability } from "../src/browser.js";
-import { getCliTurnstileChallenge, normalizeSameOriginWebUrl, pollDeviceLogin, startDeviceLogin, stripTerminalControls } from "../src/api.js";
+import { ApiError, getCliTurnstileChallenge, normalizeSameOriginWebUrl, pollDeviceLogin, startDeviceLogin, stripTerminalControls, submitFeedback } from "../src/api.js";
 import { runCli, type CliIo } from "../src/cli.js";
 import { decidePrompt } from "../src/prompt-policy.js";
 import { LocalStore, resolveStoragePaths } from "../src/storage.js";
@@ -61,6 +61,24 @@ test("browser challenge polling rejects malformed or mismatched UUIDs", async ()
   );
 });
 
+test("feedback errors preserve top-level allowance conflict codes", async () => {
+  const credential = {
+    schemaVersion: 1 as const,
+    serverUrl: "https://isaiokay.com",
+    accessToken: `iai_${"a".repeat(64)}`,
+    expiresAt: Date.now() + 60_000
+  };
+  const rejected: typeof fetch = async () => Response.json({
+    accepted: false,
+    code: "item_already_rated",
+    allowance: { remaining: 1, nextAvailableAt: null, alreadyRatedItemIds: ["item-1"] }
+  }, { status: 409 });
+  await assert.rejects(
+    submitFeedback(rejected, credential, {}),
+    (error) => error instanceof ApiError && error.status === 409 && error.code === "item_already_rated"
+  );
+});
+
 const capturedIo = (input: string, overrides: Partial<CliIo> = {}, isTTY = false): CapturedIo => {
   let out = "";
   let err = "";
@@ -73,6 +91,13 @@ const capturedIo = (input: string, overrides: Partial<CliIo> = {}, isTTY = false
       return true;
     }
   });
+  const resolvedOverrides = { ...overrides };
+  if (overrides.fetch) {
+    const providedFetch = overrides.fetch;
+    resolvedOverrides.fetch = async (request, init) => String(request).endsWith("/api/cli/allowance")
+      ? Response.json({ remaining: 2, nextAvailableAt: null, alreadyRatedItemIds: [] })
+      : providedFetch(request, init);
+  }
   return {
     io: {
       stdin: Readable.from([input]),
@@ -80,7 +105,7 @@ const capturedIo = (input: string, overrides: Partial<CliIo> = {}, isTTY = false
       stderr: writer("err") as CliIo["stderr"],
       env: {},
       now: () => 1_700_000_000_000,
-      ...overrides
+      ...resolvedOverrides
     },
     stdout: () => out,
     stderr: () => err
@@ -795,6 +820,7 @@ test("login stores only the scoped credential and rate explicitly submits minimi
     }, { status: 201 });
     if (url.endsWith("/api/cli/device/token")) return Response.json({ accessToken: `iai_${"a".repeat(64)}`, expiresIn: 3600 });
     if (url.endsWith("/api/cli/device/approve")) return Response.json({ ok: true, clientName: "Remote CLI" });
+    if (url.endsWith("/api/cli/items")) return Response.json({ items: [{ id: "1", slug: "gpt-5", name: "GPT-5", providerName: "OpenAI", type: "model" }] });
     if (url.endsWith("/api/cli/feedback")) return Response.json({ accepted: true, reportId: "report-id" }, { status: 201 });
     return Response.json({ error: { code: "unexpected", message: "Unexpected request" } }, { status: 500 });
   };
@@ -1084,6 +1110,64 @@ test("an empty interactive command opens one two-rating screen when a signed-in 
   assert.match(feedbackBodies[0] ?? "", /"confirmedItemSlug":"gpt-5-6-sol"/);
 });
 
+test("interactive ratings exclude models already rated in the rolling window", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const now = 1_800_000_000_000;
+  const store = new LocalStore(resolveStoragePaths({ home: directory, env: {} }));
+  await store.saveCredential({
+    schemaVersion: 1,
+    serverUrl: "https://isaiokay.com",
+    accessToken: `iai_${"a".repeat(64)}`,
+    expiresAt: now + 86_400_000
+  });
+  await store.recordEvent({
+    schemaVersion: 1,
+    id: "00000000-0000-4000-8000-000000000401",
+    provider: "codex",
+    attribution: "active_model",
+    model: "gpt-5.6-sol",
+    sessionHash: "r".repeat(43),
+    occurredAt: now,
+    recordedAt: now
+  });
+
+  let feedbackBody = "";
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/cli/allowance")) return Response.json({
+      remaining: 1,
+      nextAvailableAt: null,
+      alreadyRatedItemIds: ["rated-model"]
+    });
+    if (url.endsWith("/api/cli/items")) return Response.json({ items: [
+      { id: "rated-model", slug: "gpt-5-6-sol", name: "GPT-5.6 Sol", providerName: "OpenAI", type: "model" },
+      { id: "eligible-model", slug: "gpt-5-mini", name: "GPT-5 Mini", providerName: "OpenAI", type: "model" }
+    ] });
+    if (url.endsWith("/api/cli/feedback")) {
+      feedbackBody = typeof init?.body === "string" ? init.body : "";
+      return Response.json({ accepted: true, reportId: "report-id" }, { status: 201 });
+    }
+    return Response.json({ error: { code: "unexpected", message: "Unexpected request" } }, { status: 500 });
+  };
+  const rating = capturedIo("", {
+    home: directory,
+    now: () => now,
+    env: { TERM: "xterm-256color" },
+    form: async (_title, fields) => {
+      assert.deepEqual(fields[0]?.choices.map((choice) => choice.value), ["gpt-5-mini"]);
+      assert.equal(fields[0]?.initialValue, undefined);
+      return { item: "gpt-5-mini", resultQuality: "4", usageEfficiency: "4" };
+    }
+  }, true);
+  rating.io.fetch = fetcher;
+
+  assert.equal(await runCli(["rate", "submit"], rating.io), 0);
+  assert.match(rating.stdout(), /Already rated in the rolling 24-hour window: GPT-5\.6 Sol\. Choose another model\./);
+  assert.match(feedbackBody, /"confirmedItemSlug":"gpt-5-mini"/);
+  assert.doesNotMatch(feedbackBody, /gpt-5-6-sol/);
+});
+
 test("Claude's SessionStart model is preselected from an Anthropic-only catalog", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
   context.after(() => rm(directory, { recursive: true, force: true }));
@@ -1347,7 +1431,9 @@ test("JSON rating output is one complete document", async (context) => {
   const rating = capturedIo("", {
     home: directory,
     now: () => now,
-    fetch: async () => Response.json({ accepted: true, reportId: "report-id" }, { status: 201 })
+    fetch: async (input) => String(input).endsWith("/api/cli/items")
+      ? Response.json({ items: [{ id: "1", slug: "gpt-5-6-sol", name: "GPT-5.6 Sol", providerName: "OpenAI", type: "model" }] })
+      : Response.json({ accepted: true, reportId: "report-id" }, { status: 201 })
   });
   assert.equal(await runCli([
     "rate", "submit", "--json", "--result-quality", "5", "--usage-efficiency", "4", "--item", "gpt-5-6-sol"
@@ -1524,6 +1610,7 @@ test("a lost submission response retries with the same client event id", async (
     if (url.endsWith("/api/cli/device/token")) {
       return Response.json({ accessToken: `iai_${"a".repeat(64)}`, expiresIn: 3600 });
     }
+    if (url.endsWith("/api/cli/items")) return Response.json({ items: [{ id: "1", slug: "gpt-5-6-sol", name: "GPT-5.6 Sol", providerName: "OpenAI", type: "model" }] });
     if (url.endsWith("/api/cli/feedback")) {
       feedbackBodies.push(typeof init?.body === "string" ? init.body : "");
       if (feedbackBodies.length === 1) throw new Error("response lost after acceptance");
@@ -1571,6 +1658,7 @@ test("rate opens a browser challenge, polls the scoped status, and retries with 
       deviceCode: "d".repeat(64), userCode: "ABCD-EFGH", verificationUriComplete: "https://isaiokay.com/cli/authorize?user_code=ABCD-EFGH", expiresIn: 600, interval: 1
     }, { status: 201 });
     if (url.endsWith("/api/cli/device/token")) return Response.json({ accessToken: `iai_${"a".repeat(64)}`, expiresIn: 3600 });
+    if (url.endsWith("/api/cli/items")) return Response.json({ items: [{ id: "1", slug: "gpt-5", name: "GPT-5", providerName: "OpenAI", type: "model" }] });
     if (url.endsWith(`/api/cli/challenges/${challengeId}`)) {
       return Response.json({ id: challengeId, status: "verified", expiresAt: now + 60_000, challengeProof: proof });
     }

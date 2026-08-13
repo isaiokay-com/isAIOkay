@@ -349,6 +349,9 @@ const ERROR_MESSAGES: Record<string, string> = {
   rating_answers_required_use_flags: "Rating needs an interactive terminal, or --result-quality and --usage-efficiency.",
   item_confirmation_required_use_item_slug: "The model must be confirmed. Use an interactive terminal or pass `--item <slug>`.",
   model_catalog_empty: "No models are currently available to select.",
+  allowance_exhausted: "You've used both ratings in the rolling 24-hour window. Run `isaiokay allowance` to see when the next slot opens.",
+  item_already_rated: "You've already rated that model in the rolling 24-hour window. Choose a different model or edit your latest rating on the website.",
+  session_already_rated: "That coding session has already been rated. Choose another pending session.",
   invalid_defer_seconds: "Choose a reminder delay from 1 to 86400 seconds.",
   invalid_rate_operation: "Unknown rating action.",
   invalid_prompt_operation: "Unknown prompt action.",
@@ -1357,14 +1360,47 @@ const runRateSubmit = async (
   const needsModelConfirmation = !confirmedItemSlug && weakModelAttribution;
   let modelChoices: TerminalChoice[] = [];
   let detectedItemSlug: string | undefined;
+  let formInitialItemSlug: string | undefined;
+  let catalogItems: Awaited<ReturnType<typeof getTrackedItems>>;
+  let ratingAllowance: Awaited<ReturnType<typeof getAllowance>>;
+  try {
+    [catalogItems, ratingAllowance] = await Promise.all([
+      getTrackedItems(fetcherFor(io), credential),
+      getAllowance(fetcherFor(io), credential)
+    ]);
+  } catch (error) {
+    writeCommandError(parsed, io, error instanceof ApiError ? error.code : "allowance_failed", error instanceof Error ? error.message : undefined);
+    return 1;
+  }
+  if (ratingAllowance.remaining === 0) {
+    writeCommandError(parsed, io, "allowance_exhausted");
+    return 1;
+  }
+  const alreadyRated = new Set(ratingAllowance.alreadyRatedItemIds);
+  const providerItems = providerAwareModelCatalog(catalogItems, selected.provider);
+  const alreadyRatedProviderItems = providerItems.filter((item) => alreadyRated.has(item.id));
+  if (humanOutput && alreadyRatedProviderItems.length > 0) {
+    const names = alreadyRatedProviderItems.map((item) => item.name).join(", ");
+    io.stdout.write(`  ${style.dim(`Already rated in the rolling 24-hour window: ${names}. ${alreadyRatedProviderItems.length === providerItems.length ? "No eligible model remains for this provider." : "Choose another model."}`)}\n\n`);
+  }
+  detectedItemSlug = detectedCatalogSlug(providerItems, model);
+  const chosenItem = confirmedItemSlug
+    ? catalogItems.find((item) => item.slug === confirmedItemSlug)
+    : detectedItemSlug
+      ? catalogItems.find((item) => item.slug === detectedItemSlug)
+      : undefined;
+  if (chosenItem && alreadyRated.has(chosenItem.id) && (!interactiveModelConfirmation || confirmedItemSlug !== undefined)) {
+    writeCommandError(parsed, io, "item_already_rated");
+    return 1;
+  }
   if (interactiveModelConfirmation || needsModelConfirmation) {
     if (!canUseRatingForm(parsed, io)) {
       writeCommandError(parsed, io, "item_confirmation_required_use_item_slug");
       return 1;
     }
     try {
-      const items = providerAwareModelCatalog(await getTrackedItems(fetcherFor(io), credential), selected.provider);
-      detectedItemSlug = detectedCatalogSlug(items, model);
+      const items = providerItems.filter((item) => !alreadyRated.has(item.id));
+      formInitialItemSlug = detectedCatalogSlug(items, model);
       const observedSlugs = models.flatMap((observedModel) => {
         const slug = detectedCatalogSlug(items, observedModel);
         return slug === undefined ? [] : [slug];
@@ -1378,7 +1414,7 @@ const runRateSubmit = async (
         : items;
       modelChoices = visibleItems.map((item) => ({ value: item.slug, label: `${item.name} (${item.providerName})` }));
       if (modelChoices.length === 0) {
-        writeCommandError(parsed, io, "model_catalog_empty");
+        writeCommandError(parsed, io, alreadyRatedProviderItems.length > 0 ? "item_already_rated" : "model_catalog_empty");
         return 1;
       }
     } catch (error) {
@@ -1396,7 +1432,7 @@ const runRateSubmit = async (
         name: "item",
         label: "Model",
         choices: modelChoices,
-        ...(detectedItemSlug ? { initialValue: detectedItemSlug } : {})
+        ...(formInitialItemSlug ? { initialValue: formInitialItemSlug } : {})
       }] : []),
       ...(missingResultQuality ? [{
         name: "resultQuality",
@@ -1431,6 +1467,11 @@ const runRateSubmit = async (
   const usageEfficiency = parseRating(suppliedRatings.usageEfficiency) ?? parseRating(formAnswers.usageEfficiency);
   if (resultQuality === null || usageEfficiency === null) {
     writeCommandError(parsed, io, "ratings_must_be_integers_1_to_5");
+    return 1;
+  }
+  const submittedItem = confirmedItemSlug ? catalogItems.find((item) => item.slug === confirmedItemSlug) : chosenItem;
+  if (submittedItem && alreadyRated.has(submittedItem.id)) {
+    writeCommandError(parsed, io, "item_already_rated");
     return 1;
   }
   if ((interactiveModelConfirmation || needsModelConfirmation) && !confirmedItemSlug) {

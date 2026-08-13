@@ -22,6 +22,13 @@ interface AllowanceOutcome {
   allowance: FeedbackAllowance;
 }
 
+const allowanceErrorMessage = (code: string): string => ({
+  account_unavailable: "This account can no longer submit ratings.",
+  allowance_exhausted: "Both ratings in the rolling 24-hour window have already been used.",
+  item_already_rated: "That model has already been rated in the rolling 24-hour window.",
+  session_already_rated: "That coding session has already been rated."
+})[code] ?? "The rating could not be accepted.";
+
 export const POST: APIRoute = async (context) => {
   try {
     const env = getRuntimeEnv(context.locals);
@@ -96,6 +103,13 @@ export const POST: APIRoute = async (context) => {
       })
     });
     const outcome = await response.json() as AllowanceOutcome;
+    if (!response.ok && outcome.code) {
+      return json({
+        ...outcome,
+        item: resolved.item,
+        error: { code: outcome.code, message: allowanceErrorMessage(outcome.code) }
+      }, { status: response.status });
+    }
     return json({ ...outcome, item: resolved.item }, { status: response.status });
   } catch (error) {
     return toErrorResponse(error);

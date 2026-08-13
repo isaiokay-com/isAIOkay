@@ -1,6 +1,6 @@
 {
   "name": "@isaiokay/cli",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Privacy-preserving local event bridge for IsAIokay.com",
   "license": "MIT",
   "repository": {

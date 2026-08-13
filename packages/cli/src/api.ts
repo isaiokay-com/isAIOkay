@@ -78,10 +78,12 @@ const request = async (
   const body = await readJson(response);
   if (!response.ok) {
     const error = typeof body.error === "object" && body.error !== null ? body.error as Record<string, unknown> : {};
+    const responseCode = error.code ?? body.code;
+    const responseMessage = error.message ?? body.message;
     throw new ApiError(
       response.status,
-      typeof error.code === "string" && /^[a-z0-9_]{1,64}$/.test(error.code) ? error.code : "request_failed",
-      typeof error.message === "string" ? stripTerminalControls(error.message).slice(0, 500) : `Request failed (${response.status}).`,
+      typeof responseCode === "string" && /^[a-z0-9_]{1,64}$/.test(responseCode) ? responseCode : "request_failed",
+      typeof responseMessage === "string" ? stripTerminalControls(responseMessage).slice(0, 500) : `Request failed (${response.status}).`,
       typeof error.details === "object" && error.details !== null ? error.details as Record<string, unknown> : undefined
     );
   }
@@ -158,8 +160,27 @@ const credentialRequest = (
   init: RequestInit
 ): Promise<Record<string, unknown>> => request(fetcher, `${credential.serverUrl}${path}`, init, credential.accessToken);
 
-export const getAllowance = async (fetcher: Fetch, credential: CliCredential): Promise<Record<string, unknown>> =>
-  credentialRequest(fetcher, credential, "/api/cli/allowance", { method: "GET" });
+export interface ApiAllowance {
+  remaining: number;
+  nextAvailableAt: string | null;
+  alreadyRatedItemIds: string[];
+}
+
+export const getAllowance = async (fetcher: Fetch, credential: CliCredential): Promise<ApiAllowance> => {
+  const body = await credentialRequest(fetcher, credential, "/api/cli/allowance", { method: "GET" });
+  if (
+    !Number.isInteger(body.remaining) || (body.remaining as number) < 0 || (body.remaining as number) > 2 ||
+    (body.nextAvailableAt !== null && typeof body.nextAvailableAt !== "string") ||
+    !Array.isArray(body.alreadyRatedItemIds) || !body.alreadyRatedItemIds.every((id) => typeof id === "string")
+  ) {
+    throw new ApiError(502, "invalid_server_response", "The server returned an invalid rating allowance.");
+  }
+  return {
+    remaining: body.remaining as number,
+    nextAvailableAt: body.nextAvailableAt as string | null,
+    alreadyRatedItemIds: body.alreadyRatedItemIds as string[]
+  };
+};
 
 export const getTrackedItems = async (fetcher: Fetch, credential: CliCredential): Promise<ApiTrackedItem[]> => {
   const body = await credentialRequest(fetcher, credential, "/api/cli/items", { method: "GET" });
