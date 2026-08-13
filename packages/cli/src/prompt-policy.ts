@@ -1,6 +1,7 @@
 import type { LocalState, StoredEvent } from "./types.js";
 
 export const MINIMUM_DAILY_EXPERIENCE_MS = 20 * 60_000;
+export const SAME_SHELL_SUGGESTION_MAX_AGE_MS = 30 * 60_000;
 
 export type PromptDecisionReason =
   | "eligible"
@@ -55,20 +56,39 @@ const pendingSessionsToday = (state: LocalState, now: number): StoredEvent[][] =
   return groupedSessions(pendingEvents(state).filter((event) => localDayKey(event.occurredAt) === today));
 };
 
-const COMPLETION_ATTRIBUTIONS = new Set<StoredEvent["attribution"]>([
-  "active_model",
+const TERMINAL_ATTRIBUTIONS = new Set<StoredEvent["attribution"]>([
   "session_end_unknown",
   "task_complete",
   "agent_end",
   "turn_complete",
-  "turn_model",
-  "manual"
+  "turn_model"
 ]);
+
+const hasCompletionSignal = (events: StoredEvent[]): boolean =>
+  events.some((event) => TERMINAL_ATTRIBUTIONS.has(event.attribution))
+  // Older Codex hooks and foreground wrappers did not distinguish their start
+  // and end events. Retain compatibility only when the same session has a pair.
+  || (events.length >= 2 && events.some((event) => event.attribution === "active_model" || event.attribution === "manual"));
 
 const completedSessionsToday = (state: LocalState, now: number): StoredEvent[][] =>
   pendingSessionsToday(state, now).filter((events) =>
-    events.length >= 2 && events.some((event) => COMPLETION_ATTRIBUTIONS.has(event.attribution))
+    events.length >= 2 && hasCompletionSignal(events)
   );
+
+/** Select observed activity for an explicit rating, never a lifecycle start by itself. */
+export const selectRateableSession = (state: LocalState, eventId?: string, shellHash?: string, now = Date.now()): StoredEvent[] | null => {
+  const sessions = groupedSessions(pendingEvents(state)).filter((events) =>
+    events.some((event) => event.attribution !== "session_start")
+  );
+  if (eventId !== undefined) return sessions.find((events) => events.some((event) => event.id === eventId)) ?? null;
+  if (shellHash !== undefined) return sessions.find((events) => {
+    const latest = events.at(-1)?.recordedAt ?? 0;
+    return events.some((event) => event.shellHash === shellHash)
+      && latest <= now + 60_000
+      && latest >= now - SAME_SHELL_SUGGESTION_MAX_AGE_MS;
+  }) ?? null;
+  return null;
+};
 
 export const recordedSessionCount = (state: LocalState): number => groupedSessions(state.events).length;
 

@@ -206,12 +206,14 @@ from user input.
 Native hooks remain useful for model attribution. While a harness is wrapped,
 its hooks join the foreground session. A safe post-turn hook may show the daily
 reminder immediately, so a long-running process does not need to exit first.
-Claude Code's documented `SessionStart` model is retained for the matching
-session and preselected later; because Claude can switch models after startup,
-the developer can still correct that selection before submitting. Model choices are
-scoped to the vendor only when the harness has a fixed provider (for example,
-Anthropic for Claude Code and OpenAI for Codex). Multi-provider harnesses such
-as Qwen Code and Kimi Code keep the full eligible catalog. OpenCode shows the exact observed models when
+Claude Code's documented `SessionStart` model is retained for a confidently
+matched session; because Claude can switch models after startup, the developer
+can still correct that selection before submitting. Model choices are scoped to
+the vendor only when a just-finished or same-shell session proves a fixed-provider
+harness (for example, Anthropic for Claude Code and OpenAI for Codex). A plain
+`isaiokay rate` instead asks for a harness and shows the full model catalog.
+Multi-provider harnesses such as Qwen Code and Kimi Code also keep the full
+eligible catalog. OpenCode shows the exact observed models when
 they all resolve to the catalog and falls back to the broader catalog when they
 do not. If a harness exposes no safe model signal, the selector asks the
 developer to confirm it. A detached editor launcher cannot be timed by
@@ -275,7 +277,7 @@ long-term change is calculated from rating history, unknown task context remains
 unspecified, and session timing supplies recency. The flow never asks for typed
 text. Optional tags and comments are advanced flag-only fields. Piped or CI
 execution never prompts; automation can use `--result-quality`,
-`--usage-efficiency`, and `--item`, and can request JSON output.
+`--usage-efficiency`, `--provider`, and `--item`, and can request JSON output.
 On either rating step, pressing `1` through `5` selects that score directly.
 
 Running `isaiokay` without a subcommand starts onboarding on a fresh interactive
@@ -283,8 +285,11 @@ installation. Once onboarding is complete, it starts the rating flow only when
 the normal reminder policy identifies a meaningful completed session. A
 start-only event from another terminal never makes a bare command assume that
 provider; if nothing is ready to rate, it shows status and the next useful
-command. An explicit `isaiokay rate` can still rate a pending session before the
-automatic reminder threshold. A non-interactive empty invocation prints help and
+command. A plain `isaiokay rate` asks the developer to choose both harness and
+model from the complete catalogs. If a foreground wrapper recorded a session
+recently under the same parent shell, its local-only shell HMAC can confidently select
+that session and suggest its model; another terminal cannot match it. Raw process
+IDs are never stored or uploaded. A non-interactive empty invocation prints help and
 never prompts. Status checks supported executables on `PATH`; detected tools
 without an installed integration are listed with their exact installation
 commands.

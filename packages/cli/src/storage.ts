@@ -43,6 +43,7 @@ const asStoredEvent = (value: unknown): StoredEvent | null => {
   const attribution = candidate.attribution;
   const model = candidate.model;
   const sessionHash = candidate.sessionHash;
+  const shellHash = candidate.shellHash;
   const occurredAt = asFiniteTimestamp(candidate.occurredAt);
   const recordedAt = asFiniteTimestamp(candidate.recordedAt);
   if (
@@ -55,6 +56,7 @@ const asStoredEvent = (value: unknown): StoredEvent | null => {
     (typeof model === "string" && normalizeModelIdentifier(model) !== model) ||
     (typeof sessionHash !== "string" && sessionHash !== null) ||
     (typeof sessionHash === "string" && !/^[A-Za-z0-9_-]{43}$/.test(sessionHash)) ||
+    (shellHash !== undefined && (typeof shellHash !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(shellHash))) ||
     occurredAt === null ||
     recordedAt === null
   ) return null;
@@ -65,6 +67,7 @@ const asStoredEvent = (value: unknown): StoredEvent | null => {
     attribution,
     model,
     sessionHash,
+    ...(typeof shellHash === "string" ? { shellHash } : {}),
     occurredAt,
     recordedAt
   };

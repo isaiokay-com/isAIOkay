@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decidePrompt, pendingSessionCount, recordedSessionCount, reminderStatus } from "../src/prompt-policy.js";
+import { decidePrompt, pendingSessionCount, recordedSessionCount, reminderStatus, selectRateableSession } from "../src/prompt-policy.js";
 import type { LocalState, StoredEvent } from "../src/types.js";
 
 const now = 1_800_000_000_000;
@@ -66,6 +66,24 @@ test("a newer start-only session cannot displace the completed session selected 
     eventId: state.events[1]!.id
   });
   assert.equal(reminderStatus(state, now).pendingSessionCountToday, 1);
+  const shellHash = "s".repeat(43);
+  state.events[0] = { ...state.events[0]!, shellHash };
+  state.events[1] = { ...state.events[1]!, shellHash };
+  assert.deepEqual(selectRateableSession(state, undefined, shellHash, now)?.map(({ id }) => id), state.events.slice(0, 2).map(({ id }) => id));
+  assert.equal(selectRateableSession(state, undefined, shellHash, now + 31 * 60_000), null);
+});
+
+test("an explicit rating cannot select a start-only session", () => {
+  const state = stateFor("a".repeat(43));
+  state.events = [{
+    ...state.events[0]!,
+    provider: "claude",
+    attribution: "session_start",
+    model: "claude-sonnet-5"
+  }];
+  state.pendingEventIds = state.events.map(({ id }) => id);
+  assert.equal(selectRateableSession(state, undefined, "s".repeat(43), now), null);
+  assert.equal(selectRateableSession(state, state.events[0]!.id), null);
 });
 
 test("prompt cadence enforces cooldown, a local-calendar daily cap, and never-ask-again", () => {

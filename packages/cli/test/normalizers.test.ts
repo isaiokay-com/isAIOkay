@@ -34,7 +34,10 @@ test("Codex records only an explicit active model and HMACs its session", () => 
   assert.notEqual(event.sessionHash, rawSession);
   assert.equal(JSON.stringify(event).includes("do not store me"), false);
   const stop = accepted(normalizeCodex({ hook_event_name: "Stop", model: "gpt-5.6-codex", session_id: rawSession }, secret, now));
+  assert.equal(stop.event.attribution, "turn_complete");
   assert.equal(stop.notificationSafe, true);
+  const start = accepted(normalizeCodex({ hook_event_name: "SessionStart", model: "gpt-5.6-codex", session_id: rawSession }, secret, now));
+  assert.equal(start.event.attribution, "session_start");
 });
 
 test("Claude correlates SessionStart and terminal events without consuming transcript/cwd fields", () => {

@@ -42,6 +42,8 @@ export interface StoredEvent {
   attribution: Attribution;
   model: string | null;
   sessionHash: string | null;
+  /** Optional local-only HMAC used to correlate a foreground wrapper with its parent shell. */
+  shellHash?: string;
   occurredAt: number;
   recordedAt: number;
 }

@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { doctorAdapter, installAdapter, uninstallAdapter } from "./adapters.js";
 import { ApiError, approveDeviceLogin, getAllowance, getCliTurnstileChallenge, getTrackedItems, isUuid, normalizeSameOriginWebUrl, pollDeviceLogin, revokeCredential, startDeviceLogin, submitFeedback } from "./api.js";
 import { normalizeProviderEvent } from "./normalizers.js";
-import { decidePrompt, pendingSessionCount, recordedSessionCount, reminderStatus, type ReminderStatus } from "./prompt-policy.js";
+import { decidePrompt, pendingSessionCount, recordedSessionCount, reminderStatus, selectRateableSession, type ReminderStatus } from "./prompt-policy.js";
 import { createEventId, MAX_INPUT_BYTES, safeEventSummary, sessionHash as hashSession } from "./privacy.js";
 import { LocalStore, resolveStoragePaths } from "./storage.js";
 import { defaultHarnessCommand, detectShell, getShellIntegrationStatus, installShellIntegration, isSafeShellPath, renderShellIntegration, shellIntegrationActive, shellIntegrationInstalled, shellIntegrationPath, shellReloadCommand, SUPPORTED_SHELLS, uninstallShellIntegration, type SupportedShell } from "./shell-integration.js";
@@ -37,6 +37,8 @@ export interface CliIo {
     wrapperShuttingDown: boolean;
   }>;
   createId?: () => string;
+  /** Test seam for the parent interactive shell; production uses process.ppid. */
+  parentProcessId?: number;
 }
 
 interface ParsedArgs {
@@ -53,6 +55,11 @@ const CLI_VERSION = typeof packageMetadata === "object" && packageMetadata !== n
   : "unknown";
 const FOREGROUND_SESSION_ENV = "ISAI_OKAY_FOREGROUND_SESSION";
 const FOREGROUND_PROVIDER_ENV = "ISAI_OKAY_FOREGROUND_PROVIDER";
+
+const shellContextHash = (hmacSecret: string, parentProcessId: number): string | null =>
+  Number.isSafeInteger(parentProcessId) && parentProcessId > 0
+    ? hashSession(hmacSecret, `shell:${parentProcessId}`)
+    : null;
 
 const BOOLEAN_FLAGS = new Set([
   "all", "headless", "help", "json", "local", "no-color", "no-input", "no-open", "no-setup", "quiet", "silent", "verbose"
@@ -227,7 +234,7 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   status: [],
   pending: [],
   prompt: [],
-  rate: ["result-quality", "usage-efficiency", "item", "tags", "comment", "event-id", "no-open"]
+  rate: ["result-quality", "usage-efficiency", "item", "provider", "tags", "comment", "event-id", "no-open"]
 };
 
 const GLOBAL_FLAGS = ["help", "json", "no-color", "no-input", "verbose", "config-dir", "state-dir"] as const;
@@ -264,7 +271,7 @@ const detectSetupProviders = async (
 const COMMAND_HELP: Record<string, { summary: string; usage: string[]; notes?: string[] }> = {
   setup: { summary: "Sign in and connect detected coding tools.", usage: ["isaiokay", "isaiokay setup", "isaiokay setup --headless"], notes: ["A fresh interactive installation starts this flow when you run `isaiokay` with no arguments."] },
   login: { summary: "Sign in with a short-lived browser code.", usage: ["isaiokay login", "isaiokay login --headless", "isaiokay login --no-setup", "isaiokay login --json"] },
-  rate: { summary: "Rate the most recent eligible AI coding session.", usage: ["isaiokay rate", "isaiokay rate submit --result-quality 4 --usage-efficiency 3 --item <slug>", "isaiokay rate show", "isaiokay rate defer <seconds>"], notes: ["Interactive ratings use vertical keyboard selectors and require no typing. Use ↑/↓ to choose, Enter to continue, or 1–5 to jump to a rating; Esc skips today without submitting."] },
+  rate: { summary: "Rate an AI coding session, with same-shell suggestions when available.", usage: ["isaiokay rate", "isaiokay rate submit --provider <name> --item <slug> --result-quality 4 --usage-efficiency 3", "isaiokay rate show", "isaiokay rate defer <seconds>"], notes: ["Interactive ratings use vertical keyboard selectors and require no typing. Use ↑/↓ to choose, Enter to continue, or 1–5 to jump to a rating; Esc skips today without submitting."] },
   status: { summary: "Show authentication, integrations, shell activation, and check-in readiness.", usage: ["isaiokay status", "isaiokay status --json"] },
   doctor: { summary: "Check provider integrations and shell activation.", usage: ["isaiokay doctor", "isaiokay doctor codex"] },
   install: { summary: "Install one provider or every detected automatic integration.", usage: ["isaiokay install --all", "isaiokay install codex"] },
@@ -348,6 +355,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   invalid_provider: `Choose a supported provider: ${PROVIDERS.join(", ")}.`,
   ratings_must_be_integers_1_to_5: "Both ratings must be between 1 and 5.",
   no_pending_session: "There isn't a recent session waiting to be rated.",
+  harness_confirmation_required_use_provider: "The harness must be confirmed. Use an interactive terminal or pass `--provider <name>`.",
   rating_answers_required_use_flags: "Rating needs an interactive terminal, or --result-quality and --usage-efficiency.",
   item_confirmation_required_use_item_slug: "The model must be confirmed. Use an interactive terminal or pass `--item <slug>`.",
   model_catalog_empty: "No models are currently available to select.",
@@ -434,6 +442,7 @@ const foregroundSessionHash = (
 const wrapperEvent = (
   provider: Provider,
   sessionHash: string,
+  shellHash: string | null,
   occurredAt: number,
   id: string
 ): StoredEvent => ({
@@ -443,6 +452,7 @@ const wrapperEvent = (
   attribution: "manual",
   model: null,
   sessionHash,
+  ...(shellHash === null ? {} : { shellHash }),
   occurredAt,
   recordedAt: occurredAt
 });
@@ -587,10 +597,12 @@ const runHarness = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Pro
   const createId = (): string => io.createId?.() ?? createEventId();
   const rawWrapperSession = createId();
   let sessionHash: string | null = null;
+  let shellHash: string | null = null;
   const startedAt = io.now?.() ?? Date.now();
   try {
     const config = await store.getConfig();
     sessionHash = hashSession(config.hmacSecret, rawWrapperSession);
+    shellHash = shellContextHash(config.hmacSecret, io.parentProcessId ?? process.ppid);
   } catch {
     writeRunWarning(parsed, io, "Session tracking is unavailable; the harness will still run.");
     sessionHash = null;
@@ -614,8 +626,8 @@ const runHarness = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Pro
     try {
       const endedAt = io.now?.() ?? Date.now();
       await store.recordEvents([
-        wrapperEvent(provider, sessionHash, startedAt, createId()),
-        wrapperEvent(provider, sessionHash, endedAt, createId())
+        wrapperEvent(provider, sessionHash, shellHash, startedAt, createId()),
+        wrapperEvent(provider, sessionHash, shellHash, endedAt, createId())
       ]);
       // Prompt after any completed harness exit, including Ctrl-C, Ctrl+Break,
       // non-zero statuses, and crashes. Only a shutdown signal received by this
@@ -1346,24 +1358,41 @@ const runRateSubmit = async (
 ): Promise<number> => {
   const credential = await requireCredential(parsed, store, io);
   if (!credential) return 1;
-  const state = await store.getState();
-  const pending = state.events.filter((event) => state.pendingEventIds.includes(event.id));
+  const [state, config] = await Promise.all([store.getState(), store.getConfig()]);
   const selectedId = flagText(parsed.flags, "event-id");
-  const selected = selectedId ? pending.find((event) => event.id === selectedId) : pending.at(-1);
-  if (!selected) {
+  const now = io.now?.() ?? Date.now();
+  const currentShellHash = shellContextHash(config.hmacSecret, io.parentProcessId ?? process.ppid);
+  const sessionEvents = selectRateableSession(state, selectedId, currentShellHash ?? undefined, now);
+  const selected = sessionEvents?.at(-1) ?? null;
+  if (selectedId !== undefined && (!selected || !sessionEvents)) {
     writeCommandError(parsed, io, "no_pending_session");
     return 1;
   }
-  const sessionEvents = selected.sessionHash
-    ? pending.filter((event) => event.provider === selected.provider && event.sessionHash === selected.sessionHash)
-    : [selected];
-  const { model, models, mixed, attributionEvent } = summarizeSession(sessionEvents, selected.provider);
+  const summary = selected && sessionEvents ? summarizeSession(sessionEvents, selected.provider) : null;
+  const requestedProviderText = flagText(parsed.flags, "provider");
+  const requestedProvider = parseProvider(requestedProviderText);
+  if (requestedProviderText !== undefined && requestedProvider === null) {
+    writeCommandError(parsed, io, "invalid_provider");
+    return 1;
+  }
+  if (selected && requestedProvider && requestedProvider !== selected.provider) {
+    writeCommandError(parsed, io, "invalid_provider");
+    return 1;
+  }
+  let ratingProvider = selected?.provider ?? requestedProvider;
+  const confidentSession = selected !== null;
+  const model = summary?.model ?? null;
+  const models = summary?.models ?? [];
+  const mixed = summary?.mixed ?? false;
+  const attributionEvent = summary?.attributionEvent ?? null;
 
   const humanOutput = loginUsesHumanOutput(parsed, io);
   const style = loginStyles(parsed, io);
   if (humanOutput) {
     io.stdout.write(`\n  ${style.bold(style.cyan("Rate this session"))}\n`);
-    io.stdout.write(`  ${style.dim(`${selected.provider} · ${model ?? "Model confirmation needed"}`)}\n`);
+    io.stdout.write(`  ${style.dim(confidentSession
+      ? `${selected.provider} · ${model ?? "Model confirmation needed"}`
+      : "Choose the harness and model you used")}\n`);
     io.stdout.write(`  ${style.dim("Your prompts, code, transcripts, repositories, paths, and raw session ID are never sent.")}\n\n`);
     if (io.form) io.stdout.write(`  ${style.dim("Choose from each vertical list with ↑/↓ and Enter. Press 1–5 to jump to a rating.")}\n\n`);
   }
@@ -1378,10 +1407,13 @@ const runRateSubmit = async (
   }
 
   let confirmedItemSlug = flagText(parsed.flags, "item");
-  const weakModelAttribution = model === null
+  const weakModelAttribution = !confidentSession
+    || model === null
     || mixed
-    || attributionEvent.attribution === "session_start"
-    || attributionEvent.attribution === "manual";
+    || attributionEvent?.attribution === "session_start"
+    || attributionEvent?.attribution === "manual";
+  const interactiveHarnessConfirmation = ratingProvider === null && canUseRatingForm(parsed, io);
+  const needsHarnessConfirmation = ratingProvider === null;
   const interactiveModelConfirmation = !confirmedItemSlug && canUseRatingForm(parsed, io);
   const needsModelConfirmation = !confirmedItemSlug && weakModelAttribution;
   let modelChoices: TerminalChoice[] = [];
@@ -1403,13 +1435,16 @@ const runRateSubmit = async (
     return 1;
   }
   const alreadyRated = new Set(ratingAllowance.alreadyRatedItemIds);
-  const providerItems = providerAwareModelCatalog(catalogItems, selected.provider);
+  const providerItems = confidentSession
+    ? providerAwareModelCatalog(catalogItems, selected.provider)
+    : catalogItems.filter((item) => item.type === "model");
   const alreadyRatedProviderItems = providerItems.filter((item) => alreadyRated.has(item.id));
   if (humanOutput && alreadyRatedProviderItems.length > 0) {
     const names = alreadyRatedProviderItems.map((item) => item.name).join(", ");
-    io.stdout.write(`  ${style.dim(`Already rated in the rolling 24-hour window: ${names}. ${alreadyRatedProviderItems.length === providerItems.length ? "No eligible model remains for this provider." : "Choose another model."}`)}\n\n`);
+    const exhaustedMessage = confidentSession ? "No eligible model remains for this provider." : "No eligible model remains.";
+    io.stdout.write(`  ${style.dim(`Already rated in the rolling 24-hour window: ${names}. ${alreadyRatedProviderItems.length === providerItems.length ? exhaustedMessage : "Choose another model."}`)}\n\n`);
   }
-  detectedItemSlug = detectedCatalogSlug(providerItems, model, selected.provider);
+  detectedItemSlug = confidentSession ? detectedCatalogSlug(providerItems, model, selected.provider) : undefined;
   const chosenItem = confirmedItemSlug
     ? catalogItems.find((item) => item.slug === confirmedItemSlug)
     : detectedItemSlug
@@ -1419,16 +1454,16 @@ const runRateSubmit = async (
     writeCommandError(parsed, io, "item_already_rated");
     return 1;
   }
-  if (interactiveModelConfirmation || needsModelConfirmation) {
+  if (interactiveHarnessConfirmation || needsHarnessConfirmation || interactiveModelConfirmation || needsModelConfirmation) {
     if (!canUseRatingForm(parsed, io)) {
-      writeCommandError(parsed, io, "item_confirmation_required_use_item_slug");
+      writeCommandError(parsed, io, needsHarnessConfirmation ? "harness_confirmation_required_use_provider" : "item_confirmation_required_use_item_slug");
       return 1;
     }
     try {
       const items = providerItems.filter((item) => !alreadyRated.has(item.id));
-      formInitialItemSlug = detectedCatalogSlug(items, model, selected.provider);
+      formInitialItemSlug = confidentSession ? detectedCatalogSlug(items, model, selected.provider) : undefined;
       const observedSlugs = models.flatMap((observedModel) => {
-        const slug = detectedCatalogSlug(items, observedModel, selected.provider);
+        const slug = detectedCatalogSlug(items, observedModel, selected?.provider);
         return slug === undefined ? [] : [slug];
       });
       const uniqueObservedSlugs = [...new Set(observedSlugs)];
@@ -1452,8 +1487,13 @@ const runRateSubmit = async (
   const missingResultQuality = !suppliedRatings.resultQuality;
   const missingUsageEfficiency = !suppliedRatings.usageEfficiency;
   let formAnswers: Record<string, string> = {};
-  if (interactiveModelConfirmation || missingResultQuality || missingUsageEfficiency) {
+  if (interactiveHarnessConfirmation || interactiveModelConfirmation || missingResultQuality || missingUsageEfficiency) {
     const fields: TerminalFormField[] = [
+      ...(interactiveHarnessConfirmation ? [{
+        name: "provider",
+        label: "Harness",
+        choices: PROVIDERS.map((provider) => ({ value: provider, label: providerLabel(provider) }))
+      }] : []),
       ...(interactiveModelConfirmation ? [{
         name: "item",
         label: "Model",
@@ -1486,6 +1526,7 @@ const runRateSubmit = async (
       return 1;
     }
     formAnswers = form;
+    ratingProvider = parseProvider(form.provider) ?? ratingProvider;
     confirmedItemSlug = form.item ?? confirmedItemSlug;
   }
 
@@ -1493,6 +1534,10 @@ const runRateSubmit = async (
   const usageEfficiency = parseRating(suppliedRatings.usageEfficiency) ?? parseRating(formAnswers.usageEfficiency);
   if (resultQuality === null || usageEfficiency === null) {
     writeCommandError(parsed, io, "ratings_must_be_integers_1_to_5");
+    return 1;
+  }
+  if (ratingProvider === null) {
+    writeCommandError(parsed, io, "invalid_provider");
     return 1;
   }
   const submittedItem = confirmedItemSlug ? catalogItems.find((item) => item.slug === confirmedItemSlug) : chosenItem;
@@ -1507,24 +1552,24 @@ const runRateSubmit = async (
   const suppliedTags = flagText(parsed.flags, "tags");
   const tags = (suppliedTags ?? "").split(",").map((tag) => tag.trim()).filter(Boolean).slice(0, 6);
   const comment = flagText(parsed.flags, "comment");
-  const config = await store.getConfig();
-  const safeSessionHash = selected.sessionHash ?? hashSession(config.hmacSecret, selected.id);
+  const submissionId = selected?.id ?? io.createId?.() ?? createEventId();
+  const safeSessionHash = selected?.sessionHash ?? hashSession(config.hmacSecret, submissionId);
   if (!safeSessionHash) {
     writeCommandError(parsed, io, "session_identity_unavailable");
     return 1;
   }
   const payload: Record<string, unknown> = {
-    tool: providerTool(selected.provider),
-    attribution: confirmedItemSlug ? "user_confirmed" : serverAttribution(attributionEvent, mixed),
+    tool: providerTool(ratingProvider),
+    attribution: confirmedItemSlug || attributionEvent === null ? "user_confirmed" : serverAttribution(attributionEvent, mixed),
     adapterVersion: CLI_VERSION,
     sessionHash: safeSessionHash,
-    sessionDurationBucket: durationBucket(sessionEvents),
+    sessionDurationBucket: sessionEvents === null ? "unknown" : durationBucket(sessionEvents),
     resultQualityRating: resultQuality,
     usageEfficiencyRating: usageEfficiency,
     tags,
-    // The persisted local event UUID stays stable when a response is lost, so
-    // a foreground retry reaches D1 with the same idempotency key.
-    clientEventId: selected.id
+    // A confidently matched local event stays stable when a response is lost,
+    // so a foreground retry reaches D1 with the same idempotency key.
+    clientEventId: submissionId
   };
   if (model) payload.rawModelLabel = model;
   if (confirmedItemSlug) payload.confirmedItemSlug = confirmedItemSlug;
@@ -1544,7 +1589,9 @@ const runRateSubmit = async (
       result = await submitFeedback(fetcherFor(io), credential, { ...payload, ...proof });
     }
     const completedAt = io.now?.() ?? Date.now();
-    await store.completePending(sessionEvents.map((event) => event.id), nextLocalDay(completedAt));
+    if (sessionEvents !== null) {
+      await store.completePending(sessionEvents.map((event) => event.id), nextLocalDay(completedAt));
+    }
     if (humanOutput) {
       io.stdout.write(`\n  ${style.green("✓")} ${style.bold("Rating submitted. Thank you.")}\n\n`);
     } else {

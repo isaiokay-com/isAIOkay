@@ -74,7 +74,15 @@ export const normalizeCodex = (payload: unknown, hmacSecret: string, now = Date.
   return {
     accepted: true,
     notificationSafe: marker === "stop",
-    event: makeEvent({ provider: "codex", attribution: "active_model", model, rawSessionId: rawSession(payload), hmacSecret, input: payload, now })
+    event: makeEvent({
+      provider: "codex",
+      attribution: marker === "sessionstart" ? "session_start" : marker === "stop" || marker === "sessionend" ? "turn_complete" : "active_model",
+      model,
+      rawSessionId: rawSession(payload),
+      hmacSecret,
+      input: payload,
+      now
+    })
   };
 };
 

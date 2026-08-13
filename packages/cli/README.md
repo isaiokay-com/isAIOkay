@@ -190,7 +190,7 @@ Arrow keys move between fields and change values; Esc skips the check-in until
 the next local day without submitting. On either rating row, number keys `1`
 through `5` choose that score directly. Optional tags and comments remain available through
 `--tags` and `--comment`. For automation, `rate submit` accepts `--result-quality`,
-`--usage-efficiency`, `--item`, `--tags`, and `--comment` flags.
+`--usage-efficiency`, `--provider`, `--item`, `--tags`, and `--comment` flags.
 Nothing is submitted without this foreground command. Hooks may show a reminder but never call the submission path.
 
 Foreground commands use readable terminal output by default. Pass `--json` for
@@ -204,8 +204,12 @@ interactive installation starts the complete onboarding flow. After onboarding,
 it opens the one-screen rating flow only when the normal reminder policy finds a
 meaningful completed session and a valid login is present. A start-only event
 from another terminal does not make the bare command assume that provider;
-otherwise it shows the compact status screen. An explicit `isaiokay rate` can
-still rate a pending session before the automatic threshold. In pipes and CI
+otherwise it shows the compact status screen. A plain `isaiokay rate` asks for
+both the harness and model from the full catalogs; background events from other
+tabs never choose either field. When a foreground wrapper can prove that a
+session recently ran under the same parent shell, it may scope and preselect that exact
+session instead. The shell process ID is HMACed locally and is never stored raw
+or uploaded. In pipes and CI
 it never prompts and displays machine-readable help instead. The human status
 screen also detects supported, unconfigured CLIs on `PATH` and prints the exact
 `isaiokay install <provider>` commands needed to connect them.

@@ -315,6 +315,7 @@ test("run wraps any harness, forwards arguments unchanged, and asks only after e
   let launched: { command: string; args: string[]; provider: string | undefined; session: string | undefined } | null = null;
   const output = capturedIo("", {
     env: { TERM: "xterm-256color" },
+    parentProcessId: 4_242,
     now: () => now,
     fetch: async (input) => String(input).endsWith("/api/cli/items")
       ? Response.json({ items: [{ id: "1", slug: "gpt-5-6-sol", name: "GPT-5.6 Sol", providerName: "OpenAI", type: "model" }] })
@@ -344,9 +345,37 @@ test("run wraps any harness, forwards arguments unchanged, and asks only after e
     { provider: "cursor", attribution: "manual", model: null }
   ]);
   assert.equal(state.events[0]?.sessionHash, state.events[1]?.sessionHash);
+  assert.equal(state.events[0]?.shellHash, state.events[1]?.shellHash);
+  assert.match(state.events[0]?.shellHash ?? "", /^[A-Za-z0-9_-]{43}$/);
   assert.equal(state.rate.promptShownAt.length, 1);
   const persisted = await readFile(store.paths.stateFile, "utf8");
-  assert.doesNotMatch(persisted, /private-command-argument|--resume|agent/);
+  assert.doesNotMatch(persisted, /private-command-argument|--resume|agent|4242/);
+
+  const sameShell = capturedIo("", {
+    env: { TERM: "xterm-256color" },
+    parentProcessId: 4_242,
+    now: () => now,
+    fetch: output.io.fetch!,
+    form: async (_title, fields) => {
+      assert.equal(fields[0]?.name, "item");
+      return undefined;
+    }
+  }, true);
+  assert.equal(await runCli(["rate", "--config-dir", configDir, "--state-dir", stateDir], sameShell.io), 0);
+  assert.match(sameShell.stdout(), /cursor · Model confirmation needed/);
+
+  const otherShell = capturedIo("", {
+    env: { TERM: "xterm-256color" },
+    parentProcessId: 4_243,
+    now: () => now,
+    fetch: output.io.fetch!,
+    form: async (_title, fields) => {
+      assert.equal(fields[0]?.name, "provider");
+      return undefined;
+    }
+  }, true);
+  assert.equal(await runCli(["rate", "--config-dir", configDir, "--state-dir", stateDir], otherShell.io), 0);
+  assert.match(otherShell.stdout(), /Choose the harness and model you used/);
 });
 
 test("run asks after every exit with a usable terminal but stays quiet during wrapper shutdown", async (context) => {
@@ -862,12 +891,12 @@ test("login stores only the scoped credential and rate explicitly submits minimi
 
   const rating = capturedIo("", { fetch: fetcher });
   assert.equal(await runCli([
-    "rate", "submit", "--result-quality", "2", "--usage-efficiency", "3", "--item", "gpt-5", ...base
+    "rate", "submit", "--provider", "codex", "--result-quality", "2", "--usage-efficiency", "3", "--item", "gpt-5", ...base
   ], rating.io), 0);
   const submission = requests.find((request) => request.url.endsWith("/api/cli/feedback"))?.body ?? "";
   assert.equal(submission.includes(privateSession), false);
   assert.equal(submission.includes(privatePrompt), false);
-  assert.match(submission, /"rawModelLabel":"gpt-5"/);
+  assert.match(submission, /"tool":"codex"/);
   assert.match(submission, /"resultQualityRating":2/);
   assert.match(submission, /"usageEfficiencyRating":3/);
 });
@@ -1167,6 +1196,59 @@ test("a fresh bare command does not infer Claude from a start-only event in anot
   assert.doesNotMatch(freshTab.stdout(), /Rate this session|Claude Fable|Claude Opus|Claude Sonnet/);
 });
 
+test("an explicit rate command ignores a start-only Claude session and offers every harness and model", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const now = 1_800_000_000_000;
+  const store = new LocalStore(resolveStoragePaths({ home: directory, env: {} }));
+  await store.saveCredential({
+    schemaVersion: 1,
+    serverUrl: "https://isaiokay.com",
+    accessToken: `iai_${"a".repeat(64)}`,
+    expiresAt: now + 60_000
+  });
+  const hook = capturedIo(JSON.stringify({
+    hook_event_name: "SessionStart",
+    model: "claude-sonnet-5",
+    session_id: "claude-session-in-another-tab"
+  }), { home: directory, now: () => now });
+  assert.equal(await runCli(["hook", "--provider", "claude"], hook.io), 0);
+
+  let feedbackBody = "";
+  const rating = capturedIo("", {
+    home: directory,
+    now: () => now,
+    env: { TERM: "xterm-256color" },
+    fetch: async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/cli/items")) return Response.json({ items: [
+        { id: "1", slug: "claude-sonnet-5", name: "Claude Sonnet 5", providerName: "Anthropic", type: "model" },
+        { id: "2", slug: "gpt-5-6-sol", name: "GPT-5.6 Sol", providerName: "OpenAI", type: "model" }
+      ] });
+      if (url.endsWith("/api/cli/feedback")) {
+        feedbackBody = typeof init?.body === "string" ? init.body : "";
+        return Response.json({ accepted: true, reportId: "manual-report" }, { status: 201 });
+      }
+      return Response.json({ error: { code: "unexpected", message: "Unexpected request" } }, { status: 500 });
+    },
+    form: async (_title, fields) => {
+      assert.deepEqual(fields.map(({ name }) => name), ["provider", "item", "resultQuality", "usageEfficiency"]);
+      assert.deepEqual(fields[0]?.choices.map(({ value }) => value), [...PROVIDERS]);
+      assert.deepEqual(fields[1]?.choices.map(({ value }) => value), ["claude-sonnet-5", "gpt-5-6-sol"]);
+      assert.equal(fields[1]?.initialValue, undefined);
+      return { provider: "grok", item: "gpt-5-6-sol", resultQuality: "4", usageEfficiency: "4" };
+    }
+  }, true);
+
+  assert.equal(await runCli(["rate"], rating.io), 0);
+  assert.match(rating.stdout(), /Choose the harness and model you used/);
+  assert.doesNotMatch(rating.stdout(), /claude ·/);
+  assert.match(feedbackBody, /"tool":"grok-build"/);
+  assert.match(feedbackBody, /"confirmedItemSlug":"gpt-5-6-sol"/);
+  assert.doesNotMatch(feedbackBody, /claude-sonnet-5|rawModelLabel/);
+  assert.equal((await store.getState()).pendingEventIds.length, 1);
+});
+
 test("interactive ratings exclude models already rated in the rolling window", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
   context.after(() => rm(directory, { recursive: true, force: true }));
@@ -1212,9 +1294,10 @@ test("interactive ratings exclude models already rated in the rolling window", a
     now: () => now,
     env: { TERM: "xterm-256color" },
     form: async (_title, fields) => {
-      assert.deepEqual(fields[0]?.choices.map((choice) => choice.value), ["gpt-5-mini"]);
-      assert.equal(fields[0]?.initialValue, undefined);
-      return { item: "gpt-5-mini", resultQuality: "4", usageEfficiency: "4" };
+      assert.equal(fields[0]?.name, "provider");
+      assert.deepEqual(fields[1]?.choices.map((choice) => choice.value), ["gpt-5-mini"]);
+      assert.equal(fields[1]?.initialValue, undefined);
+      return { provider: "codex", item: "gpt-5-mini", resultQuality: "4", usageEfficiency: "4" };
     }
   }, true);
   rating.io.fetch = fetcher;
@@ -1282,7 +1365,8 @@ test("Claude's SessionStart model is preselected from an Anthropic-only catalog"
     }
   }, true);
 
-  assert.equal(await runCli(["rate", "submit"], rating.io), 0);
+  const eventId = (await store.getState()).pendingEventIds.at(-1)!;
+  assert.equal(await runCli(["rate", "submit", "--event-id", eventId], rating.io), 0);
   assert.match(feedbackBody, /"rawModelLabel":"claude-sonnet-5"/);
   assert.match(feedbackBody, /"confirmedItemSlug":"claude-sonnet-5"/);
   assert.match(feedbackBody, /"attribution":"user_confirmed"/);
@@ -1341,7 +1425,8 @@ test("Grok Build lifecycle hooks produce an xAI-scoped rateable session", async 
     }
   }, true);
 
-  assert.equal(await runCli(["rate"], rating.io), 0);
+  const eventId = (await store.getState()).pendingEventIds.at(-1)!;
+  assert.equal(await runCli(["rate", "--event-id", eventId], rating.io), 0);
   assert.match(feedbackBody, /"tool":"grok-build"/);
   assert.match(feedbackBody, /"confirmedItemSlug":"grok-4-6"/);
   assert.doesNotMatch(await readFile(store.paths.stateFile, "utf8"), /private-grok-session|private\/workspace/);
@@ -1413,7 +1498,8 @@ test("Qwen and Kimi lifecycle hooks preselect known models without hiding third-
         return { item: candidate.item, resultQuality: "5", usageEfficiency: "4" };
       }
     }, true);
-    assert.equal(await runCli(["rate"], rating.io), 0);
+    const eventId = (await store.getState()).pendingEventIds.at(-1)!;
+    assert.equal(await runCli(["rate", "--event-id", eventId], rating.io), 0);
     assert.match(feedbackBody, new RegExp(`"tool":"${candidate.tool}"`));
     assert.match(feedbackBody, new RegExp(`"confirmedItemSlug":"${candidate.item}"`));
     assert.doesNotMatch(await readFile(store.paths.stateFile, "utf8"), /private-(?:qwen|kimi)-session|private\/(?:qwen|kimi)/);
@@ -1493,7 +1579,7 @@ test("a mixed OpenCode session offers only the models actually observed", async 
     }
   }, true);
 
-  assert.equal(await runCli(["rate", "submit"], rating.io), 0);
+  assert.equal(await runCli(["rate", "submit", "--event-id", "00000000-0000-4000-8000-000000000302"], rating.io), 0);
   assert.match(feedbackBody, /"confirmedItemSlug":"deepseek-v4-pro"/);
   assert.doesNotMatch(feedbackBody, /gpt-5-6-sol/);
 });
@@ -1555,7 +1641,7 @@ test("a final opaque Cursor Auto state never preselects an earlier explicit mode
     }
   }, true);
 
-  assert.equal(await runCli(["rate", "submit"], rating.io), 0);
+  assert.equal(await runCli(["rate", "submit", "--event-id", "00000000-0000-4000-8000-000000000304"], rating.io), 0);
 });
 
 test("Esc skips a direct check-in until the next local day", async (context) => {
@@ -1625,7 +1711,7 @@ test("JSON rating output is one complete document", async (context) => {
       : Response.json({ accepted: true, reportId: "report-id" }, { status: 201 })
   });
   assert.equal(await runCli([
-    "rate", "submit", "--json", "--result-quality", "5", "--usage-efficiency", "4", "--item", "gpt-5-6-sol"
+    "rate", "submit", "--json", "--provider", "codex", "--result-quality", "5", "--usage-efficiency", "4", "--item", "gpt-5-6-sol"
   ], rating.io), 0);
   const lines = rating.stdout().trim().split("\n");
   assert.equal(lines.length, 1);
@@ -1814,9 +1900,11 @@ test("a lost submission response retries with the same client event id", async (
     event: "model.active", model: "gpt-5.6-sol", session_id: "stable-private-session"
   }));
   assert.equal(await runCli(["hook", "--provider", "codex", ...base], hook.io), 0);
+  const state = JSON.parse(await readFile(join(stateDir, "isaiokay", "state.json"), "utf8")) as { pendingEventIds: string[] };
+  const eventId = state.pendingEventIds.at(-1)!;
 
   const ratingArgs = [
-    "rate", "submit", "--result-quality", "4", "--usage-efficiency", "4", "--item", "gpt-5-6-sol", ...base
+    "rate", "submit", "--event-id", eventId, "--result-quality", "4", "--usage-efficiency", "4", "--item", "gpt-5-6-sol", ...base
   ];
   const first = capturedIo("", { fetch: fetcher });
   assert.equal(await runCli(ratingArgs, first.io), 1);
@@ -1880,7 +1968,7 @@ test("rate opens a browser challenge, polls the scoped status, and retries with 
     sleep: async (milliseconds) => { now += milliseconds; }
   });
   assert.equal(await runCli([
-    "rate", "submit", "--result-quality", "4", "--usage-efficiency", "4", "--item", "gpt-5", ...base
+    "rate", "submit", "--provider", "codex", "--result-quality", "4", "--usage-efficiency", "4", "--item", "gpt-5", ...base
   ], rating.io), 0);
 
   assert.deepEqual(opened, [verificationUrl]);
