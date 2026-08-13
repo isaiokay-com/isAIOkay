@@ -51,6 +51,9 @@ const pendingEvents = (state: LocalState): StoredEvent[] => {
   return state.events.filter((event) => pending.has(event.id));
 };
 
+const latestRecordedAt = (events: readonly StoredEvent[]): number =>
+  events.reduce((latest, event) => Math.max(latest, event.recordedAt), 0);
+
 const pendingSessionsToday = (state: LocalState, now: number): StoredEvent[][] => {
   const today = localDayKey(now);
   return groupedSessions(pendingEvents(state).filter((event) => localDayKey(event.occurredAt) === today));
@@ -81,12 +84,15 @@ export const selectRateableSession = (state: LocalState, eventId?: string, shell
     events.some((event) => event.attribution !== "session_start")
   );
   if (eventId !== undefined) return sessions.find((events) => events.some((event) => event.id === eventId)) ?? null;
-  if (shellHash !== undefined) return sessions.find((events) => {
-    const latest = events.at(-1)?.recordedAt ?? 0;
-    return events.some((event) => event.shellHash === shellHash)
-      && latest <= now + 60_000
-      && latest >= now - SAME_SHELL_SUGGESTION_MAX_AGE_MS;
-  }) ?? null;
+  if (shellHash !== undefined) return sessions
+    .filter((events) => {
+      const latest = latestRecordedAt(events);
+      return hasCompletionSignal(events)
+        && events.some((event) => event.shellHash === shellHash)
+        && latest <= now + 60_000
+        && latest >= now - SAME_SHELL_SUGGESTION_MAX_AGE_MS;
+    })
+    .sort((left, right) => latestRecordedAt(right) - latestRecordedAt(left))[0] ?? null;
   return null;
 };
 

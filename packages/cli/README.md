@@ -206,11 +206,11 @@ meaningful completed session and a valid login is present. A start-only event
 from another terminal does not make the bare command assume that provider;
 otherwise it shows the compact status screen. A plain `isaiokay rate` asks for
 both the harness and model from the full catalogs; background events from other
-tabs never choose either field. When a foreground wrapper can prove that a
-session recently ran under the same parent shell, it may scope and preselect that exact
-session instead. The shell process ID is HMACed locally and is never stored raw
-or uploaded. In pipes and CI
-it never prompts and displays machine-readable help instead. The human status
+tabs never choose either field. When a completed native hook or foreground
+wrapper can prove that a session recently ran under the same managed shell, it
+may scope and preselect that exact session instead. The shell context is HMACed
+locally and is never stored raw or uploaded. In pipes and CI it never prompts
+and displays machine-readable help instead. The human status
 screen also detects supported, unconfigured CLIs on `PATH` and prints the exact
 `isaiokay install <provider>` commands needed to connect them.
 It reports true recorded and pending session counts while retaining the older

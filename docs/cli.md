@@ -286,11 +286,12 @@ the normal reminder policy identifies a meaningful completed session. A
 start-only event from another terminal never makes a bare command assume that
 provider; if nothing is ready to rate, it shows status and the next useful
 command. A plain `isaiokay rate` asks the developer to choose both harness and
-model from the complete catalogs. If a foreground wrapper recorded a session
-recently under the same parent shell, its local-only shell HMAC can confidently select
-that session and suggest its model; another terminal cannot match it. Raw process
-IDs are never stored or uploaded. A non-interactive empty invocation prints help and
-never prompts. Status checks supported executables on `PATH`; detected tools
+model from the complete catalogs. If a completed hook or foreground wrapper
+recorded a session recently under the same managed shell, its local-only shell
+context HMAC can confidently select that session and suggest its model; another
+terminal cannot match it. Raw process IDs are never stored or uploaded. A
+non-interactive empty invocation prints help and never prompts. Status checks
+supported executables on `PATH`; detected tools
 without an installed integration are listed with their exact installation
 commands.
 

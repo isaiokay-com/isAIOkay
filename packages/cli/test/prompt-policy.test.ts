@@ -86,6 +86,34 @@ test("an explicit rating cannot select a start-only session", () => {
   assert.equal(selectRateableSession(state, state.events[0]!.id), null);
 });
 
+test("same-shell suggestions require a completion signal", () => {
+  const state = stateFor("a".repeat(43));
+  state.events = [{ ...state.events[0]!, shellHash: "s".repeat(43), occurredAt: now, recordedAt: now }];
+  state.pendingEventIds = state.events.map(({ id }) => id);
+  assert.equal(selectRateableSession(state, undefined, "s".repeat(43), now), null);
+});
+
+test("same-shell suggestions use local observation time instead of provider timestamps", () => {
+  const shellHash = "s".repeat(43);
+  const state = stateFor("a".repeat(43));
+  state.events = state.events.map((entry) => ({
+    ...entry,
+    shellHash,
+    occurredAt: entry.occurredAt + 60 * 60_000,
+    recordedAt: now - 10 * 60_000
+  }));
+  const recent = stateFor("b".repeat(43)).events.map((entry, index) => ({
+    ...entry,
+    id: `00000000-0000-4000-8000-00000000001${index + 1}`,
+    shellHash,
+    occurredAt: entry.occurredAt - 60 * 60_000,
+    recordedAt: now
+  }));
+  state.events.push(...recent);
+  state.pendingEventIds = state.events.map(({ id }) => id);
+  assert.deepEqual(selectRateableSession(state, undefined, shellHash, now)?.map(({ id }) => id), recent.map(({ id }) => id));
+});
+
 test("prompt cadence enforces cooldown, a local-calendar daily cap, and never-ask-again", () => {
   const state = stateFor("a".repeat(43));
   state.rate.nextAllowedAt = now + 1;

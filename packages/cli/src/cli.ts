@@ -7,7 +7,7 @@ import { normalizeProviderEvent } from "./normalizers.js";
 import { decidePrompt, pendingSessionCount, recordedSessionCount, reminderStatus, selectRateableSession, type ReminderStatus } from "./prompt-policy.js";
 import { createEventId, MAX_INPUT_BYTES, safeEventSummary, sessionHash as hashSession } from "./privacy.js";
 import { LocalStore, resolveStoragePaths } from "./storage.js";
-import { defaultHarnessCommand, detectShell, getShellIntegrationStatus, installShellIntegration, isSafeShellPath, renderShellIntegration, shellIntegrationActive, shellIntegrationInstalled, shellIntegrationPath, shellReloadCommand, SUPPORTED_SHELLS, uninstallShellIntegration, type SupportedShell } from "./shell-integration.js";
+import { defaultHarnessCommand, detectShell, getShellIntegrationStatus, installShellIntegration, isSafeShellPath, renderShellIntegration, SHELL_CONTEXT_ENV, shellIntegrationActive, shellIntegrationInstalled, shellIntegrationPath, shellReloadCommand, SUPPORTED_SHELLS, uninstallShellIntegration, type SupportedShell } from "./shell-integration.js";
 import { summarizeSession } from "./session-summary.js";
 import type { TerminalChoice, TerminalFormField } from "./terminal.js";
 import { PROVIDERS, type ApiTrackedItem, type CliCredential, type Provider, type StoredEvent } from "./types.js";
@@ -37,7 +37,7 @@ export interface CliIo {
     wrapperShuttingDown: boolean;
   }>;
   createId?: () => string;
-  /** Test seam for the parent interactive shell; production uses process.ppid. */
+  /** Test seam for the legacy parent-process fallback when no managed shell context is present. */
   parentProcessId?: number;
 }
 
@@ -56,10 +56,14 @@ const CLI_VERSION = typeof packageMetadata === "object" && packageMetadata !== n
 const FOREGROUND_SESSION_ENV = "ISAI_OKAY_FOREGROUND_SESSION";
 const FOREGROUND_PROVIDER_ENV = "ISAI_OKAY_FOREGROUND_PROVIDER";
 
-const shellContextHash = (hmacSecret: string, parentProcessId: number): string | null =>
-  Number.isSafeInteger(parentProcessId) && parentProcessId > 0
-    ? hashSession(hmacSecret, `shell:${parentProcessId}`)
-    : null;
+const shellContextHash = (hmacSecret: string, shellProcessId: string | number | undefined): string | null => {
+  const value = typeof shellProcessId === "number" ? String(shellProcessId) : shellProcessId?.trim();
+  return value && /^[1-9][0-9]{0,19}$/u.test(value) ? hashSession(hmacSecret, `shell:${value}`) : null;
+};
+
+const shellHashFor = (hmacSecret: string, io: CliIo, parentFallback: boolean): string | null =>
+  shellContextHash(hmacSecret, io.env?.[SHELL_CONTEXT_ENV])
+  ?? (parentFallback ? shellContextHash(hmacSecret, io.parentProcessId ?? process.ppid) : null);
 
 const BOOLEAN_FLAGS = new Set([
   "all", "headless", "help", "json", "local", "no-color", "no-input", "no-open", "no-setup", "quiet", "silent", "verbose"
@@ -358,6 +362,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   harness_confirmation_required_use_provider: "The harness must be confirmed. Use an interactive terminal or pass `--provider <name>`.",
   rating_answers_required_use_flags: "Rating needs an interactive terminal, or --result-quality and --usage-efficiency.",
   item_confirmation_required_use_item_slug: "The model must be confirmed. Use an interactive terminal or pass `--item <slug>`.",
+  item_not_available_for_harness: "That model is not available for the confidently detected harness.",
   model_catalog_empty: "No models are currently available to select.",
   allowance_exhausted: "You've used both ratings in the rolling 24-hour window. Run `isaiokay allowance` to see when the next slot opens.",
   item_already_rated: "You've already rated that model in the rolling 24-hour window. Choose a different model or edit your latest rating on the website.",
@@ -525,7 +530,12 @@ const runHook = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promis
       return 0;
     }
     const wrapperHash = foregroundSessionHash(io, provider, config.hmacSecret);
-    const event = wrapperHash === null ? normalized.event : { ...normalized.event, sessionHash: wrapperHash };
+    const shellHash = shellHashFor(config.hmacSecret, io, false);
+    const event = {
+      ...normalized.event,
+      ...(wrapperHash === null ? {} : { sessionHash: wrapperHash }),
+      ...(shellHash === null ? {} : { shellHash })
+    };
     await store.recordEvent(event);
     if (!normalized.notificationSafe) {
       result({
@@ -602,7 +612,7 @@ const runHarness = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Pro
   try {
     const config = await store.getConfig();
     sessionHash = hashSession(config.hmacSecret, rawWrapperSession);
-    shellHash = shellContextHash(config.hmacSecret, io.parentProcessId ?? process.ppid);
+    shellHash = shellHashFor(config.hmacSecret, io, true);
   } catch {
     writeRunWarning(parsed, io, "Session tracking is unavailable; the harness will still run.");
     sessionHash = null;
@@ -865,7 +875,7 @@ const runPending = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Pro
   const body = { pendingCount: state.pendingEventIds.length, pendingSessionCount: pendingSessionCount(state) };
   writeResult(parsed, io, body, (style) => {
     io.stdout.write(`\n  ${style.bold("Pending sessions")}  ${body.pendingSessionCount}\n`);
-    if (body.pendingSessionCount > 0) io.stdout.write(`  Run ${style.cyan("isaiokay rate")} to rate the latest one.\n`);
+    if (body.pendingSessionCount > 0) io.stdout.write(`  Run ${style.cyan("isaiokay rate")} to choose a harness and model.\n`);
     io.stdout.write("\n");
   });
   return 0;
@@ -1285,8 +1295,7 @@ const providerAwareModelCatalog = (items: ApiTrackedItem[], provider: Provider):
   const models = items.filter((item) => item.type === "model");
   const providerName = MODEL_PROVIDER_BY_HARNESS[provider];
   if (!providerName) return models;
-  const scoped = models.filter((item) => catalogKey(item.providerName) === providerName);
-  return scoped.length > 0 ? scoped : models;
+  return models.filter((item) => catalogKey(item.providerName) === providerName);
 };
 
 const MODEL_CATALOG_ALIASES: Partial<Record<Provider, Readonly<Record<string, string>>>> = {
@@ -1361,7 +1370,7 @@ const runRateSubmit = async (
   const [state, config] = await Promise.all([store.getState(), store.getConfig()]);
   const selectedId = flagText(parsed.flags, "event-id");
   const now = io.now?.() ?? Date.now();
-  const currentShellHash = shellContextHash(config.hmacSecret, io.parentProcessId ?? process.ppid);
+  const currentShellHash = shellHashFor(config.hmacSecret, io, true);
   const sessionEvents = selectRateableSession(state, selectedId, currentShellHash ?? undefined, now);
   const selected = sessionEvents?.at(-1) ?? null;
   if (selectedId !== undefined && (!selected || !sessionEvents)) {
@@ -1438,6 +1447,10 @@ const runRateSubmit = async (
   const providerItems = confidentSession
     ? providerAwareModelCatalog(catalogItems, selected.provider)
     : catalogItems.filter((item) => item.type === "model");
+  if (confirmedItemSlug && confidentSession && !providerItems.some((item) => item.slug === confirmedItemSlug)) {
+    writeCommandError(parsed, io, "item_not_available_for_harness");
+    return 1;
+  }
   const alreadyRatedProviderItems = providerItems.filter((item) => alreadyRated.has(item.id));
   if (humanOutput && alreadyRatedProviderItems.length > 0) {
     const names = alreadyRatedProviderItems.map((item) => item.name).join(", ");
@@ -1589,9 +1602,7 @@ const runRateSubmit = async (
       result = await submitFeedback(fetcherFor(io), credential, { ...payload, ...proof });
     }
     const completedAt = io.now?.() ?? Date.now();
-    if (sessionEvents !== null) {
-      await store.completePending(sessionEvents.map((event) => event.id), nextLocalDay(completedAt));
-    }
+    await store.completePending(sessionEvents?.map((event) => event.id) ?? [], nextLocalDay(completedAt));
     if (humanOutput) {
       io.stdout.write(`\n  ${style.green("✓")} ${style.bold("Rating submitted. Thank you.")}\n\n`);
     } else {

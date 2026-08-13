@@ -80,6 +80,7 @@ test("managed zsh integration preserves user configuration and is idempotent", a
   assert.match(installed, /qwen\(\).*isaiokay run qwen/);
   assert.match(installed, /kimi\(\).*isaiokay run kimi/);
   assert.match(installed, /muse\(\).*isaiokay run muse/);
+  assert.match(installed, /export ISAI_OKAY_SHELL_CONTEXT=\$\$/);
   assert.match(installed, /\[ -t 0 \].*\[ -t 1 \]/);
   assert.match(installed, /! \$\+functions\[codex\].*! \$\+aliases\[codex\]/);
   assert.equal(await shellIntegrationInstalled("zsh", home), true);
@@ -162,7 +163,7 @@ test("fish safely refreshes and removes an older app-owned integration", async (
   const home = await mkdtemp(join(tmpdir(), "isaiokay-shell-"));
   context.after(() => rm(home, { recursive: true, force: true }));
   const path = join(home, ".config", "fish", "conf.d", "isaiokay.fish");
-  const previous = renderShellIntegration("fish").replace("set -gx ISAI_OKAY_SHELL_ACTIVE fish\n", "");
+  const previous = renderShellIntegration("fish").replace("set -gx ISAI_OKAY_SHELL_CONTEXT $fish_pid\n", "");
   await mkdir(join(home, ".config", "fish", "conf.d"), { recursive: true });
   await writeFile(path, previous, "utf8");
 
@@ -184,6 +185,7 @@ test("managed PowerShell integration preserves the profile and wraps Windows com
 
   assert.deepEqual(await installShellIntegration("powershell", home, options), { path, changed: true });
   const installed = await readFile(path, "utf8");
+  assert.match(installed, /ISAI_OKAY_SHELL_CONTEXT.*\$PID/);
   assert.match(installed, /USER_SETTING = 'preserved'/);
   assert.match(installed, /function global:codex.*isaiokay.*run codex/);
   assert.match(installed, /function global:claude.*isaiokay.*run claude/);

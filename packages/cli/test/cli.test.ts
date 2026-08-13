@@ -1175,7 +1175,7 @@ test("a fresh bare command does not infer Claude from a start-only event in anot
     hook_event_name: "SessionStart",
     model: "claude-sonnet-5",
     session_id: "claude-session-in-another-tab"
-  }), { home: directory, now: () => now });
+  }), { home: directory, now: () => now, env: { ISAI_OKAY_SHELL_CONTEXT: "111" } });
   assert.equal(await runCli(["hook", "--provider", "claude"], hook.io), 0);
 
   let formOpened = false;
@@ -1183,7 +1183,7 @@ test("a fresh bare command does not infer Claude from a start-only event in anot
   const freshTab = capturedIo("", {
     home: directory,
     now: () => now,
-    env: { TERM: "xterm-256color" },
+    env: { TERM: "xterm-256color", ISAI_OKAY_SHELL_CONTEXT: "222" },
     commandExists: async () => false,
     fetch: async () => { fetched = true; throw new Error("must not fetch"); },
     form: async () => { formOpened = true; return {}; }
@@ -1211,14 +1211,36 @@ test("an explicit rate command ignores a start-only Claude session and offers ev
     hook_event_name: "SessionStart",
     model: "claude-sonnet-5",
     session_id: "claude-session-in-another-tab"
-  }), { home: directory, now: () => now });
+  }), { home: directory, now: () => now, env: { ISAI_OKAY_SHELL_CONTEXT: "888" } });
   assert.equal(await runCli(["hook", "--provider", "claude"], hook.io), 0);
+  await store.recordEvents([
+    {
+      schemaVersion: 1,
+      id: "00000000-0000-4000-8000-000000000401",
+      provider: "codex",
+      attribution: "active_model",
+      model: "gpt-5.6-sol",
+      sessionHash: "c".repeat(43),
+      occurredAt: now - 21 * 60_000,
+      recordedAt: now - 21 * 60_000
+    },
+    {
+      schemaVersion: 1,
+      id: "00000000-0000-4000-8000-000000000402",
+      provider: "codex",
+      attribution: "turn_complete",
+      model: "gpt-5.6-sol",
+      sessionHash: "c".repeat(43),
+      occurredAt: now,
+      recordedAt: now
+    }
+  ]);
 
   let feedbackBody = "";
   const rating = capturedIo("", {
     home: directory,
     now: () => now,
-    env: { TERM: "xterm-256color" },
+    env: { TERM: "xterm-256color", ISAI_OKAY_SHELL_CONTEXT: "888" },
     fetch: async (input, init) => {
       const url = String(input);
       if (url.endsWith("/api/cli/items")) return Response.json({ items: [
@@ -1246,7 +1268,11 @@ test("an explicit rate command ignores a start-only Claude session and offers ev
   assert.match(feedbackBody, /"tool":"grok-build"/);
   assert.match(feedbackBody, /"confirmedItemSlug":"gpt-5-6-sol"/);
   assert.doesNotMatch(feedbackBody, /claude-sonnet-5|rawModelLabel/);
-  assert.equal((await store.getState()).pendingEventIds.length, 1);
+  const state = await store.getState();
+  assert.equal(state.pendingEventIds.length, 3);
+  assert.equal(decidePrompt(state, now).reason, "cooldown");
+  assert.ok((state.rate.nextAllowedAt ?? 0) > now);
+  assert.doesNotMatch(await readFile(store.paths.stateFile, "utf8"), /888/);
 });
 
 test("interactive ratings exclude models already rated in the rolling window", async (context) => {
@@ -1328,7 +1354,7 @@ test("Claude's SessionStart model is preselected from an Anthropic-only catalog"
       hook_event_name: hookEventName,
       model: hookEventName === "SessionStart" ? "claude-sonnet-5" : undefined,
       session_id: "private-claude-session"
-    }), { home: directory, now: () => occurredAt });
+    }), { home: directory, now: () => occurredAt, env: { ISAI_OKAY_SHELL_CONTEXT: "777" } });
     assert.equal(await runCli(["hook", "--provider", "claude"], hook.io), 0);
   }
 
@@ -1352,7 +1378,7 @@ test("Claude's SessionStart model is preselected from an Anthropic-only catalog"
     fetch: fetcher,
     home: directory,
     now: () => now,
-    env: { TERM: "xterm-256color" },
+    env: { TERM: "xterm-256color", ISAI_OKAY_SHELL_CONTEXT: "777" },
     form: async (title, fields) => {
       assert.equal(title, "Quick check-in");
       assert.deepEqual(fields.map((field) => field.name), ["item", "resultQuality", "usageEfficiency"]);
@@ -1366,10 +1392,19 @@ test("Claude's SessionStart model is preselected from an Anthropic-only catalog"
   }, true);
 
   const eventId = (await store.getState()).pendingEventIds.at(-1)!;
-  assert.equal(await runCli(["rate", "submit", "--event-id", eventId], rating.io), 0);
+  const mismatched = capturedIo("", { fetch: fetcher, home: directory, now: () => now });
+  assert.equal(await runCli([
+    "rate", "submit", "--event-id", eventId, "--item", "gpt-5-6-sol",
+    "--result-quality", "5", "--usage-efficiency", "4"
+  ], mismatched.io), 1);
+  assert.match(mismatched.stderr(), /item_not_available_for_harness/);
+  assert.equal(feedbackBody, "");
+
+  assert.equal(await runCli(["rate", "submit"], rating.io), 0);
   assert.match(feedbackBody, /"rawModelLabel":"claude-sonnet-5"/);
   assert.match(feedbackBody, /"confirmedItemSlug":"claude-sonnet-5"/);
   assert.match(feedbackBody, /"attribution":"user_confirmed"/);
+  assert.doesNotMatch(await readFile(store.paths.stateFile, "utf8"), /777/);
 });
 
 test("Grok Build lifecycle hooks produce an xAI-scoped rateable session", async (context) => {
