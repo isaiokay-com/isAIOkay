@@ -6,7 +6,7 @@ import { Readable } from "node:stream";
 import test from "node:test";
 import { detectBrowserAvailability } from "../src/browser.js";
 import { ApiError, getCliTurnstileChallenge, normalizeSameOriginWebUrl, pollDeviceLogin, startDeviceLogin, stripTerminalControls, submitFeedback } from "../src/api.js";
-import { runCli, type CliIo } from "../src/cli.js";
+import { harnessForMarketProvider, runCli, type CliIo } from "../src/cli.js";
 import { decidePrompt } from "../src/prompt-policy.js";
 import { LocalStore, resolveStoragePaths } from "../src/storage.js";
 import { PROVIDERS } from "../src/types.js";
@@ -25,6 +25,16 @@ test("browser URLs must stay on the configured server origin", () => {
 
 test("remote text cannot inject terminal control sequences", () => {
   assert.equal(stripTerminalControls("safe\u001b[2J\ntext"), "safe[2Jtext");
+});
+
+test("market subscription providers map to their supported coding harness", () => {
+  assert.deepEqual(
+    ["OpenAI", "Anthropic", "xAI", "GitHub", "Cursor", "OpenCode", "Kimi", "Moonshot AI"]
+      .map((provider) => harnessForMarketProvider(provider)),
+    ["codex", "claude", "grok", "copilot", "cursor", "opencode", "kimi", "kimi"]
+  );
+  assert.equal(harnessForMarketProvider("Google"), null);
+  assert.equal(harnessForMarketProvider("Cognition"), null);
 });
 
 test("device login rejects malformed or unbounded server fields", async () => {
@@ -119,6 +129,71 @@ test("version output matches the package metadata", async () => {
   const output = capturedIo("");
   assert.equal(await runCli(["--version"], output.io), 0);
   assert.equal(output.stdout(), `${metadata.version}\n`);
+});
+
+test("cloud usage reports all-time subscription, model, effort, and source totals", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const configDir = join(directory, "config");
+  const stateDir = join(directory, "state");
+  const store = new LocalStore({
+    configFile: join(configDir, "isaiokay", "config.json"),
+    credentialFile: join(configDir, "isaiokay", "credential.json"),
+    stateFile: join(stateDir, "isaiokay", "state.json")
+  });
+  await store.saveCredential({
+    schemaVersion: 1,
+    serverUrl: "https://isaiokay.com",
+    accessToken: `iai_${"a".repeat(64)}`,
+    expiresAt: 1_800_000_000_000
+  });
+  let requestedUrl = "";
+  const captured = capturedIo("", {
+    fetch: async (input) => {
+      requestedUrl = String(input);
+      return Response.json({ rows: [{
+        clientSubscriptionId: "10000000-0000-4000-8000-000000000001",
+        planLabel: "Claude Max 5x", providerName: "Anthropic",
+        reportedModel: "claude-opus-test", reasoningEffort: "high", querySource: "subagent",
+        inputTokens: 100, cacheReadTokens: 50, cacheWriteTokens: 10, outputTokens: 20,
+        reasoningTokens: 5, observedTokens: 180, usageSliceCount: 1,
+        firstObservedAt: 1_700_000_000_000, lastObservedAt: 1_700_000_000_000
+      }] });
+    }
+  });
+  assert.equal(await runCli(["usage", "--cloud", "--period", "all", "--json", "--config-dir", configDir, "--state-dir", stateDir], captured.io), 0);
+  assert.equal(requestedUrl, "https://isaiokay.com/api/cli/usage?period=all");
+  const output = JSON.parse(captured.stdout()) as { period: string; rows: Array<{ reportedModel: string; reasoningEffort: string }> };
+  assert.equal(output.period, "all");
+  assert.deepEqual(output.rows.map(({ reportedModel, reasoningEffort }) => ({ reportedModel, reasoningEffort })), [{ reportedModel: "claude-opus-test", reasoningEffort: "high" }]);
+});
+
+test("subscription consent can be changed without deleting private history", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "isaiokay-cli-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const configDir = join(directory, "config");
+  const stateDir = join(directory, "state");
+  const subscriptionId = "10000000-0000-4000-8000-000000000001";
+  const base = ["--config-dir", configDir, "--state-dir", stateDir];
+
+  const added = capturedIo("", { createId: () => subscriptionId, now: () => 1_800_000_000_000 });
+  assert.equal(await runCli([
+    "subscription", "add", "--provider", "claude", "--plan", "Claude Max 5x", "--price", "100", ...base
+  ], added.io), 0);
+
+  const enabled = capturedIo("", { now: () => 1_800_000_001_000 });
+  assert.equal(await runCli(["subscription", "consent", subscriptionId, "on", ...base], enabled.io), 0);
+  const store = new LocalStore({
+    configFile: join(configDir, "isaiokay", "config.json"),
+    credentialFile: join(configDir, "isaiokay", "credential.json"),
+    stateFile: join(stateDir, "isaiokay", "state.json")
+  });
+  assert.equal((await store.getConfig()).subscriptions[0]?.aggregateConsent, true);
+
+  const disabled = capturedIo("", { now: () => 1_800_000_002_000 }, true);
+  assert.equal(await runCli(["subscription", "consent", subscriptionId, "off", ...base], disabled.io), 0);
+  assert.equal((await store.getConfig()).subscriptions[0]?.aggregateConsent, false);
+  assert.match(disabled.stdout(), /private usage history is unchanged/i);
 });
 
 test("hook is noninteractive, returns success on rejected input, and persists only safe state", async (context) => {
@@ -1093,7 +1168,7 @@ test("cancelling first-run setup leaves onboarding incomplete and allows a retry
     form: async () => ({})
   }, true);
   assert.equal(await runCli([], retry.io), 0);
-  assert.equal(fetchedAgain, false);
+  assert.equal(fetchedAgain, true);
   assert.match(retry.stdout(), /Already signed in/);
   assert.equal((await store.getConfig()).onboardingCompletedAt, 1_700_000_000_000);
 });

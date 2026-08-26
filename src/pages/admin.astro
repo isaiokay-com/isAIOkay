@@ -2,6 +2,8 @@
 import BaseLayout from "../components/BaseLayout.astro";
 import Header from "../components/Header.astro";
 import AdminModeration from "../components/islands/AdminModeration";
+import SubscriptionCatalogAdmin from "../components/islands/SubscriptionCatalogAdmin";
+import type { SubscriptionCatalogPlan, SubscriptionCatalogPrice } from "../components/islands/SubscriptionCatalogAdmin";
 import { allActiveItems, listAdminReports, listCatalogCandidates } from "../db/repositories";
 import { getRuntimeEnv } from "../lib/runtime";
 import { requireAdministrator } from "../services/auth";
@@ -15,11 +17,22 @@ try {
 } catch {
   return Astro.redirect("/");
 }
-const reports = await listAdminReports(env);
-const items = await allActiveItems(env);
-const candidates = await listCatalogCandidates(env, "pending");
+const [reports, items, candidates, planResult, priceResult] = await Promise.all([
+  listAdminReports(env),
+  allActiveItems(env),
+  listCatalogCandidates(env, "pending"),
+  env.DB.prepare(`select id, slug, provider_name as providerName, name, billing_period as billingPeriod,
+      price_micros as priceMicros, currency, official_url as officialUrl, terms_version as termsVersion,
+      terms_last_verified_at as termsLastVerifiedAt, is_active as isActive
+    from subscription_plan order by is_active desc, provider_name, name`).all<SubscriptionCatalogPlan>(),
+  env.DB.prepare(`select id, provider_name as providerName, model_key as modelKey, display_name as displayName,
+      input_micros_per_million as inputMicrosPerMillion, cache_read_micros_per_million as cacheReadMicrosPerMillion,
+      cache_write_micros_per_million as cacheWriteMicrosPerMillion, output_micros_per_million as outputMicrosPerMillion,
+      source_url as sourceUrl, effective_from as effectiveFrom, effective_to as effectiveTo
+    from model_price order by provider_name, model_key, effective_from desc`).all<SubscriptionCatalogPrice>()
+]);
 ---
 <BaseLayout title="Moderation Admin | IsAIokay.com" description="Protected IsAIokay.com moderation workspace." noindex>
   <Header />
-  <main class="px-5 py-7 sm:px-8"><p class="eyebrow mb-2 text-xs text-[var(--accent)]">Protected workspace</p><div class="mb-6 flex flex-wrap items-end justify-between gap-3"><div><h1 class="m-0 text-3xl font-extrabold tracking-[-.055em]">Moderation</h1><p class="mb-0 text-sm text-[var(--muted)]">Signed in as {administrator.name}. Release references, catalog decisions, exclusions, and restores are audit logged.</p></div><a class="button-light" href="/">View public rankings</a></div><AdminModeration client:load initialReports={reports} initialItems={items} initialCandidates={candidates} /></main>
+  <main class="px-5 py-7 sm:px-8"><p class="eyebrow mb-2 text-xs text-[var(--accent)]">Protected workspace</p><div class="mb-6 flex flex-wrap items-end justify-between gap-3"><div><h1 class="m-0 text-3xl font-extrabold tracking-[-.055em]">Operations</h1><p class="mb-0 text-sm text-[var(--muted)]">Signed in as {administrator.name}. Subscription terms, price intervals, catalog decisions, exclusions, and restores are audit logged.</p></div><a class="button-light" href="/">View public rankings</a></div><div class="grid gap-8"><SubscriptionCatalogAdmin client:load initialPlans={planResult.results} initialPrices={priceResult.results} /><AdminModeration client:load initialReports={reports} initialItems={items} initialCandidates={candidates} /></div></main>
 </BaseLayout>

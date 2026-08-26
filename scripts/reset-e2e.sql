@@ -1,5 +1,8 @@
 -- Reset only fixed local mock identities. This is intentionally not part of
 -- `db:seed`, so normal local developer feedback is never erased.
+-- The local E2E secret hashes fixed mock IDs, so their irreversible markers
+-- cannot be targeted with plain SQL. This reset runs only in the E2E database.
+delete from deleted_identity;
 delete from audit_log where actor_user_id in (
   '11111111-1111-4111-8111-111111111111',
   '22222222-2222-4222-8222-222222222222',

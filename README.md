@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  A community view of how AI coding models are doing in everyday development work.
+  A community measurement of what AI coding subscriptions actually deliver.
 </p>
 
 <p align="center">
@@ -16,35 +16,39 @@
 
 ## About
 
-Hi, I'm [Andrés](https://x.com/andfkdev). I started IsAIokay because I was tired of trying to work out which AI model was actually best for coding right now. Models change quickly, new ones appear all the time, and benchmarks do not always reflect what it feels like to use them in real development work.
+Hi, I'm [Andrés](https://x.com/andfkdev). I started IsAIokay because coding subscriptions can change without giving subscribers a useful way to compare what they receive. A plan may silently deliver fewer usable sessions, a different model mix, or more low-cost tokens while still looking unchanged on its pricing page.
 
-My mission is to use feedback from developers working with these tools every day to build a clearer picture of the real experience across the models available. That means understanding not only whether they produce good results, but whether those results feel worth the time and usage they consume. This shared view should make it easier for all of us to choose the model that gives us the best coding experience at any given moment.
+The project measures provider-reported token usage, quota movement, model/version, reasoning effort, cache behavior, service tier, and main/subagent/auxiliary activity across real coding sessions. Users can configure several subscriptions and contribute privacy-safe aggregates. Together, those observations can show whether a plan's effective allowance or value appears to increase or decrease over time.
 
-IsAIokay.com collects that feedback through short ratings and brings the recent results together by model. It is open source, so anyone can see how the project works and help improve it.
+An occasional satisfaction check-in remains available because token volume is not result quality. Measured allowance and subjective outcome stay separate in the data and UI. The project is open source, including its attribution, privacy, confidence, and ranking rules.
 
 This repository contains both parts of the project:
 
-- the [IsAIokay.com](https://isaiokay.com) website, where ratings and model trends are published;
-- the optional [`isaiokay` CLI](./packages/cli), which makes it easy to leave feedback close to the coding session.
+- the [IsAIokay.com](https://isaiokay.com) website, where subscription value, evidence, model mix, and qualitative model trends are published;
+- the optional [`isaiokay` CLI](./packages/cli), which collects prompt-free usage metadata and optional check-ins close to the coding session.
 
 You do not need an account to browse the website. GitHub sign-in is used when submitting a rating or creating a public profile.
 
 I originally wanted to offer X sign-in as well, but the X integration needed by the project requires paid API access. IsAIokay does not make any money, so GitHub is currently the only sign-in option.
 
-## How ratings work
+## How measurement works
 
-A rating is intentionally small. It records the model and asks two questions:
+The immutable unit is a usage slice: the smallest request, message, turn, or model/session total that a tool exposes reliably. Each slice can carry:
 
-1. How good was the result?
-2. Did the progress feel worth the usage?
+- subscription, harness, and provider;
+- requested and reported model/version;
+- reasoning effort or model variant;
+- main-agent, subagent, auxiliary, or background source;
+- input, cache-read, cache-write, output, and reasoning tokens;
+- exact, inferred, estimated, or unknown attribution quality.
 
-The first question is about the usefulness and correctness of what the model produced. The second captures the less visible part of the experience: whether the result felt reasonable for the subscription allowance, tokens, or metered usage it took to get there.
+A session may contain many such slices. It is never assigned wholesale to the model visible at its start or end. Quota snapshots are stored separately because exact token attribution does not imply exact per-model subscription-quota burn.
 
-The coding tool can be included as context, but rankings are about models rather than agents. Trends, comparisons, and recency are calculated by the service; developers do not have to fill in extra fields or write a comment.
+Public plan rankings require at least five opted-in contributors, disclose sample size and freshness, and remain Pending unless time-valid API prices cover at least 80% of observed tokens. Raw-token totals never determine the winner. See the complete [telemetry and ranking contract](./docs/subscription-telemetry.md).
 
 ## Using the CLI
 
-The CLI can listen for completed sessions from supported coding tools and offer a check-in after enough meaningful use. It does not ask after every command, and it never submits a rating on its own.
+The CLI can collect token/model/effort metadata from supported coding tools, sync it to a private account, and optionally contribute it to community aggregates. It can still offer a low-frequency result-quality check-in, but never submits one on its own.
 
 Node.js 22 or newer is required.
 
@@ -53,14 +57,22 @@ npm install --global @isaiokay/cli
 isaiokay
 ```
 
-The first run signs in through GitHub, looks for coding tools installed on the machine, and offers to configure the integrations it finds. Once setup is complete, continue using commands such as `codex`, `claude`, `agent`, `opencode`, or `gemini` normally.
+The first run signs in through GitHub, finds installed coding tools, offers the current market-plan catalog, and asks separately whether community aggregation is allowed. Once setup is complete, continue using commands such as `codex`, `claude`, `opencode`, or `grok` normally.
 
-When a check-in is available, the model is preselected when the coding tool provides a reliable model identifier. The whole rating can be completed from the terminal, or skipped for the day.
+Provider session files are scanned locally for allowlisted counters and labels; prompts, responses, code, paths, and raw identifiers are discarded before local state is written. Managed foreground sessions collect and sync automatically when authenticated.
 
 Some useful commands:
 
 ```bash
-isaiokay status             # Show authentication, integrations, and prompt state
+isaiokay subscription list  # Show configured plans and harness bindings
+isaiokay subscription consent <id> off # Stop community aggregation
+isaiokay usage              # Tokens grouped by plan, model, and effort
+isaiokay usage --cloud --period all # Synced usage across devices
+isaiokay collect            # Scan provider metadata locally
+isaiokay sync               # Upload pending prompt-free observations
+isaiokay export > usage.json
+isaiokay telemetry delete --yes
+isaiokay status             # Show subscriptions, telemetry, and integrations
 isaiokay doctor             # Check installed integrations
 isaiokay rate               # Open a rating manually
 isaiokay prompt status      # Explain whether a reminder is currently eligible
@@ -79,9 +91,9 @@ Automatic integrations are available for Codex, Claude Code, Cursor Agent, OpenC
 
 ## Privacy
 
-IsAIokay is designed to collect a rating, not a record of the work behind it. The CLI does not persist or upload prompts, responses, source code, diffs, file paths, transcripts, repository names, working directories, shell commands, or raw provider session identifiers.
+IsAIokay is designed to measure usage, not reconstruct the work behind it. The CLI may read provider-owned JSON/JSONL records, but retains only allowlisted token, model, effort, tier, source, quota, and timestamp metadata. It does not persist or upload prompts, responses, source code, diffs, file paths, repository names, working directories, shell commands, provider credentials, or raw session/request identifiers.
 
-Hooks only record a small local event that helps determine whether a check-in is appropriate. A rating reaches the service only after the developer reviews and submits it in the foreground.
+Raw identifiers are HMACed locally. Collection is configured per subscription, and private storage is distinct from community aggregation consent. `isaiokay export` exposes the local minimized record; `isaiokay telemetry delete --yes` deletes local and cloud telemetry. Account deletion also removes subscriptions, usage slices, and quota snapshots.
 
 Public profiles are optional and contain ratings only: the model, the two scores, optional coding-tool context, and submission time. See the [CLI privacy contract](./docs/cli.md#privacy-contract) and the website [Privacy Policy](https://isaiokay.com/privacy) for the full details.
 

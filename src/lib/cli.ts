@@ -64,6 +64,7 @@ export const cliFeedbackInputSchema = z.object({
   adapterVersion: z.string().trim().min(1).max(32),
   sessionHash: z.string().regex(/^(?:[a-f0-9]{64}|[A-Za-z0-9_-]{43})$/i),
   sessionDurationBucket: sessionDurationBucketSchema.default("unknown"),
+  clientSubscriptionId: z.uuid().optional(),
   resultQualityRating: z.number().int().min(1).max(5),
   usageEfficiencyRating: z.number().int().min(1).max(5),
   tags: z.array(z.string().trim().min(1).max(32)).max(6).default([]),

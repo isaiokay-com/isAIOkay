@@ -23,7 +23,7 @@ const {
   title = HOME_PAGE_TITLE,
   description = HOME_PAGE_DESCRIPTION,
   noindex = false,
-  image = "/og-ai-coding-model-rankings.png",
+  image = "/og-coding-subscription-rankings.png",
   imageAlt = DEFAULT_SOCIAL_IMAGE_ALT,
   imageWidth = 1200,
   imageHeight = 630,
@@ -51,10 +51,10 @@ const defaultStructuredData = {
   },
   inLanguage: "en"
 };
-const structuredDataJson = structuredData
-  ? serializeJsonForHtml(structuredData)
-  : noindex
-    ? null
+const structuredDataJson = noindex
+  ? null
+  : structuredData
+    ? serializeJsonForHtml(structuredData)
     : serializeJsonForHtml(defaultStructuredData);
 ---
 <!doctype html>

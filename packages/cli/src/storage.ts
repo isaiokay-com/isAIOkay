@@ -5,10 +5,13 @@ import { basename, dirname, join } from "node:path";
 import { normalizeModelIdentifier } from "./privacy.js";
 import { decidePrompt, type PromptDecision } from "./prompt-policy.js";
 import { isSafeShellPath } from "./shell-integration.js";
-import type { AdapterRegistration, CliCredential, LocalConfig, LocalState, Provider, StoragePaths, StoredEvent } from "./types.js";
+import type { AdapterRegistration, CliCredential, LocalConfig, LocalState, LocalSubscription, Provider, StoragePaths, StoredEvent, StoredQuotaSnapshot, StoredUsageSlice } from "./types.js";
 
 const MAX_EVENTS = 250;
 const MAX_PENDING = 100;
+const MAX_USAGE = 10_000;
+const MAX_QUOTA = 2_000;
+const MAX_PENDING_TELEMETRY = 10_000;
 const LOCK_RETRY_MS = 15;
 const LOCK_ATTEMPTS = 100;
 const STALE_LOCK_MS = 10_000;
@@ -17,6 +20,10 @@ const defaultState = (): LocalState => ({
   schemaVersion: 1,
   events: [],
   pendingEventIds: [],
+  usage: [],
+  pendingUsageIds: [],
+  quota: [],
+  pendingQuotaIds: [],
   rate: { nextAllowedAt: null, hookReminderShownAt: [], promptShownAt: [], promptsDisabled: false }
 });
 
@@ -25,6 +32,8 @@ const defaultConfig = (): LocalConfig => ({
   hmacSecret: randomBytes(32).toString("base64url"),
   onboardingCompletedAt: null,
   adapters: {},
+  subscriptions: [],
+  subscriptionBindings: {},
   shellIntegrations: []
 });
 
@@ -35,6 +44,83 @@ const asProvider = (value: unknown): Provider | null =>
   value === "codex" || value === "claude" || value === "cursor" || value === "opencode" || value === "gemini" || value === "copilot" || value === "cline" || value === "windsurf" || value === "aider" || value === "amp" || value === "grok" || value === "qwen" || value === "kimi" || value === "muse"
     ? value
     : null;
+
+const isUuid = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+const isPrivateHash = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value);
+const isSafeText = (value: unknown, max: number): value is string => typeof value === "string" && value.length >= 1 && value.length <= max && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+const isCount = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 1_000_000_000_000;
+const isPercent = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
+
+const asSubscription = (value: unknown): LocalSubscription | null => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const item = value as Record<string, unknown>;
+  const provider = asProvider(item.provider);
+  const billingPeriod = item.billingPeriod;
+  const startedAt = item.startedAt === null ? null : asFiniteTimestamp(item.startedAt);
+  const endedAt = item.endedAt === null ? null : asFiniteTimestamp(item.endedAt);
+  if (
+    !isUuid(item.id) || provider === null || !isSafeText(item.providerName, 80) || !isSafeText(item.planLabel, 100) ||
+    (item.planSlug !== undefined && (typeof item.planSlug !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(item.planSlug))) ||
+    (billingPeriod !== "monthly" && billingPeriod !== "annual" && billingPeriod !== "weekly" && billingPeriod !== "other") ||
+    (item.priceMicros !== null && !isCount(item.priceMicros)) || typeof item.currency !== "string" || !/^[A-Z]{3}$/.test(item.currency) ||
+    typeof item.aggregateConsent !== "boolean" || (item.startedAt !== null && startedAt === null) || (item.endedAt !== null && endedAt === null) ||
+    (startedAt !== null && endedAt !== null && endedAt <= startedAt) ||
+    asFiniteTimestamp(item.createdAt) === null || asFiniteTimestamp(item.updatedAt) === null
+  ) return null;
+  return {
+    id: item.id,
+    provider,
+    providerName: item.providerName,
+    planLabel: item.planLabel,
+    ...(typeof item.planSlug === "string" ? { planSlug: item.planSlug } : {}),
+    billingPeriod,
+    priceMicros: item.priceMicros as number | null,
+    currency: item.currency,
+    aggregateConsent: item.aggregateConsent,
+    startedAt,
+    endedAt,
+    createdAt: item.createdAt as number,
+    updatedAt: item.updatedAt as number
+  };
+};
+
+const asUsageSlice = (value: unknown): StoredUsageSlice | null => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const item = value as Record<string, unknown>;
+  const provider = asProvider(item.provider);
+  const nullableTexts = [item.requestedModel, item.modelFamily, item.modelVersion, item.reasoningEffort, item.modelVariant, item.serviceTier];
+  const counts = [item.inputTokens, item.cacheReadTokens, item.cacheWriteTokens, item.outputTokens, item.reasoningTokens];
+  if (
+    item.schemaVersion !== 1 || !isUuid(item.id) || !isUuid(item.subscriptionId) || provider === null || !isSafeText(item.tool, 40) ||
+    (item.sessionHash !== null && !isPrivateHash(item.sessionHash)) || (item.requestHash !== null && !isPrivateHash(item.requestHash)) ||
+    !isSafeText(item.reportedModel, 160) || nullableTexts.some((entry) => entry !== null && !isSafeText(entry, 160)) ||
+    (item.querySource !== "main" && item.querySource !== "subagent" && item.querySource !== "auxiliary" && item.querySource !== "background" && item.querySource !== "unknown") ||
+    (item.granularity !== "request" && item.granularity !== "message" && item.granularity !== "turn" && item.granularity !== "session_model") ||
+    (item.attributionQuality !== "exact" && item.attributionQuality !== "inferred" && item.attributionQuality !== "estimated" && item.attributionQuality !== "unknown") ||
+    (item.tokenAttributionQuality !== "exact" && item.tokenAttributionQuality !== "inferred" && item.tokenAttributionQuality !== "estimated" && item.tokenAttributionQuality !== "unknown") ||
+    (item.modelAttributionQuality !== "exact" && item.modelAttributionQuality !== "inferred" && item.modelAttributionQuality !== "estimated" && item.modelAttributionQuality !== "unknown") ||
+    (item.effortAttributionQuality !== "exact" && item.effortAttributionQuality !== "inferred" && item.effortAttributionQuality !== "estimated" && item.effortAttributionQuality !== "unknown") ||
+    counts.some((entry) => !isCount(entry)) || counts.reduce<number>((sum, entry) => sum + Number(entry), 0) <= 0 ||
+    (item.reportedTotalTokens !== null && !isCount(item.reportedTotalTokens)) || asFiniteTimestamp(item.observedAt) === null || asFiniteTimestamp(item.recordedAt) === null
+  ) return null;
+  return item as unknown as StoredUsageSlice;
+};
+
+const asQuotaSnapshot = (value: unknown): StoredQuotaSnapshot | null => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const item = value as Record<string, unknown>;
+  const provider = asProvider(item.provider);
+  if (
+    item.schemaVersion !== 1 || !isUuid(item.id) || !isUuid(item.subscriptionId) || provider === null || !isSafeText(item.quotaScope, 80) ||
+    (item.windowKind !== "session" && item.windowKind !== "daily" && item.windowKind !== "weekly" && item.windowKind !== "monthly" && item.windowKind !== "rolling" && item.windowKind !== "unknown") ||
+    (item.usedPercent !== null && !isPercent(item.usedPercent)) || (item.remainingPercent !== null && !isPercent(item.remainingPercent)) ||
+    (item.usedPercent === null && item.remainingPercent === null) ||
+    (item.resetAt !== null && asFiniteTimestamp(item.resetAt) === null) ||
+    (item.attributionQuality !== "exact" && item.attributionQuality !== "inferred" && item.attributionQuality !== "estimated" && item.attributionQuality !== "unknown") ||
+    asFiniteTimestamp(item.observedAt) === null || asFiniteTimestamp(item.recordedAt) === null
+  ) return null;
+  return item as unknown as StoredQuotaSnapshot;
+};
 
 const asStoredEvent = (value: unknown): StoredEvent | null => {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -79,6 +165,12 @@ const parseState = (value: unknown): LocalState | null => {
   if (candidate.schemaVersion !== 1 || !Array.isArray(candidate.events) || !Array.isArray(candidate.pendingEventIds)) return null;
   const events = candidate.events.map(asStoredEvent).filter((event): event is StoredEvent => event !== null).slice(-MAX_EVENTS);
   const pendingEventIds = candidate.pendingEventIds.filter((value): value is string => typeof value === "string").slice(-MAX_PENDING);
+  const usage = (Array.isArray(candidate.usage) ? candidate.usage : []).map(asUsageSlice).filter((entry): entry is StoredUsageSlice => entry !== null).slice(-MAX_USAGE);
+  const retainedUsageIds = new Set(usage.map(({ id }) => id));
+  const pendingUsageIds = (Array.isArray(candidate.pendingUsageIds) ? candidate.pendingUsageIds : []).filter((id): id is string => typeof id === "string" && retainedUsageIds.has(id)).slice(-MAX_PENDING_TELEMETRY);
+  const quota = (Array.isArray(candidate.quota) ? candidate.quota : []).map(asQuotaSnapshot).filter((entry): entry is StoredQuotaSnapshot => entry !== null).slice(-MAX_QUOTA);
+  const retainedQuotaIds = new Set(quota.map(({ id }) => id));
+  const pendingQuotaIds = (Array.isArray(candidate.pendingQuotaIds) ? candidate.pendingQuotaIds : []).filter((id): id is string => typeof id === "string" && retainedQuotaIds.has(id)).slice(-MAX_PENDING_TELEMETRY);
   const rateCandidate = candidate.rate;
   const nextAllowedAt = typeof rateCandidate === "object" && rateCandidate !== null && !Array.isArray(rateCandidate)
     ? (rateCandidate as Record<string, unknown>).nextAllowedAt
@@ -102,6 +194,10 @@ const parseState = (value: unknown): LocalState | null => {
     schemaVersion: 1,
     events,
     pendingEventIds,
+    usage,
+    pendingUsageIds,
+    quota,
+    pendingQuotaIds,
     rate: { nextAllowedAt: asFiniteTimestamp(nextAllowedAt), hookReminderShownAt, promptShownAt, promptsDisabled }
   };
 };
@@ -119,6 +215,15 @@ const parseConfig = (value: unknown): LocalConfig | null => {
       const entry = value as Record<string, unknown>;
       const installedAt = asFiniteTimestamp(entry.installedAt);
       if ((entry.mode === "manual" || entry.mode === "installed") && installedAt !== null) adapters[provider] = { mode: entry.mode, installedAt };
+    }
+  }
+  const subscriptions = (Array.isArray(candidate.subscriptions) ? candidate.subscriptions : [])
+    .map(asSubscription).filter((entry): entry is LocalSubscription => entry !== null).slice(-50);
+  const subscriptionIds = new Set(subscriptions.map(({ id }) => id));
+  const subscriptionBindings: Record<string, string> = {};
+  if (typeof candidate.subscriptionBindings === "object" && candidate.subscriptionBindings !== null && !Array.isArray(candidate.subscriptionBindings)) {
+    for (const [bindingKey, subscriptionId] of Object.entries(candidate.subscriptionBindings)) {
+      if (/^[a-z0-9][a-z0-9._:/@+-]{0,119}$/.test(bindingKey) && typeof subscriptionId === "string" && subscriptionIds.has(subscriptionId)) subscriptionBindings[bindingKey] = subscriptionId;
     }
   }
   const shellIntegrations: LocalConfig["shellIntegrations"] = Array.isArray(candidate.shellIntegrations)
@@ -139,6 +244,8 @@ const parseConfig = (value: unknown): LocalConfig | null => {
       ? 1
       : asFiniteTimestamp(candidate.onboardingCompletedAt),
     adapters,
+    subscriptions,
+    subscriptionBindings,
     shellIntegrations
   };
 };
@@ -319,6 +426,86 @@ export class LocalStore {
 
   async completeOnboarding(now = Date.now()): Promise<LocalConfig> {
     return this.mutateConfig((config) => ({ ...config, onboardingCompletedAt: now }));
+  }
+
+  async upsertSubscription(subscription: LocalSubscription): Promise<LocalConfig> {
+    if (asSubscription(subscription) === null) throw new Error("invalid subscription");
+    return this.mutateConfig((config) => ({
+      ...config,
+      subscriptions: [...config.subscriptions.filter(({ id }) => id !== subscription.id), subscription].slice(-50)
+    }));
+  }
+
+  async bindSubscription(bindingKey: string, subscriptionId: string): Promise<LocalConfig> {
+    return this.mutateConfig((config) => {
+      if (!/^[a-z0-9][a-z0-9._:/@+-]{0,119}$/.test(bindingKey)) throw new Error("invalid binding key");
+      const harness = asProvider(bindingKey.split(":", 1)[0]);
+      const subscription = config.subscriptions.find(({ id, provider: subscriptionProvider }) => id === subscriptionId && (harness === "opencode" || subscriptionProvider === harness));
+      if (!subscription) throw new Error("subscription not found");
+      return { ...config, subscriptionBindings: { ...config.subscriptionBindings, [bindingKey]: subscriptionId } };
+    });
+  }
+
+  async recordTelemetry(input: { usage?: StoredUsageSlice[]; quota?: StoredQuotaSnapshot[] }): Promise<LocalState> {
+    const usage = input.usage ?? [];
+    const quota = input.quota ?? [];
+    if (usage.some((entry) => asUsageSlice(entry) === null) || quota.some((entry) => asQuotaSnapshot(entry) === null)) {
+      throw new Error("invalid minimized telemetry");
+    }
+    return this.mutateState((state) => {
+      const usageKey = (entry: StoredUsageSlice) => entry.requestHash ? `${entry.provider}:${entry.requestHash}` : entry.id;
+      const usageByObservation = new Map(state.usage.map((entry) => [usageKey(entry), entry]));
+      const acceptedUsage: StoredUsageSlice[] = [];
+      for (const entry of usage) {
+        const key = usageKey(entry);
+        if (usageByObservation.has(key)) continue;
+        usageByObservation.set(key, entry);
+        acceptedUsage.push(entry);
+      }
+      const nextUsage = [...usageByObservation.values()].slice(-MAX_USAGE);
+      const quotaKey = (entry: StoredQuotaSnapshot) => `${entry.provider}:${entry.subscriptionId}:${entry.quotaScope}:${entry.observedAt}`;
+      const quotaByObservation = new Map(state.quota.map((entry) => [quotaKey(entry), entry]));
+      const acceptedQuota: StoredQuotaSnapshot[] = [];
+      for (const entry of quota) {
+        const key = quotaKey(entry);
+        if (quotaByObservation.has(key)) continue;
+        quotaByObservation.set(key, entry);
+        acceptedQuota.push(entry);
+      }
+      const nextQuota = [...quotaByObservation.values()].slice(-MAX_QUOTA);
+      const usageIds = new Set(nextUsage.map(({ id }) => id));
+      const quotaIds = new Set(nextQuota.map(({ id }) => id));
+      return {
+        ...state,
+        usage: nextUsage,
+        quota: nextQuota,
+        pendingUsageIds: [...state.pendingUsageIds.filter((id) => usageIds.has(id)), ...acceptedUsage.map(({ id }) => id).filter((id) => usageIds.has(id))].slice(-MAX_PENDING_TELEMETRY),
+        pendingQuotaIds: [...state.pendingQuotaIds.filter((id) => quotaIds.has(id)), ...acceptedQuota.map(({ id }) => id).filter((id) => quotaIds.has(id))].slice(-MAX_PENDING_TELEMETRY)
+      };
+    });
+  }
+
+  async completeTelemetry(usageIds: string[], quotaIds: string[]): Promise<LocalState> {
+    const completedUsage = new Set(usageIds);
+    const completedQuota = new Set(quotaIds);
+    return this.mutateState((state) => ({
+      ...state,
+      pendingUsageIds: state.pendingUsageIds.filter((id) => !completedUsage.has(id)),
+      pendingQuotaIds: state.pendingQuotaIds.filter((id) => !completedQuota.has(id))
+    }));
+  }
+
+  async clearTelemetry(includeSubscriptions = false): Promise<void> {
+    await this.mutateState((state) => ({
+      ...state,
+      usage: [],
+      pendingUsageIds: [],
+      quota: [],
+      pendingQuotaIds: []
+    }));
+    if (includeSubscriptions) {
+      await this.mutateConfig((config) => ({ ...config, subscriptions: [], subscriptionBindings: {} }));
+    }
   }
 
   async recordEvent(event: StoredEvent): Promise<LocalState> {

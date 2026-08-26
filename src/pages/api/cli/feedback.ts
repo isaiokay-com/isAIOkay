@@ -37,6 +37,14 @@ export const POST: APIRoute = async (context) => {
     const input = cliFeedbackInputSchema.parse(await context.request.json());
     const resolved = await resolveCliTrackedItem(env, input);
     const agentItemId = await resolveCliAgentItemId(env, input);
+    const subscription = input.clientSubscriptionId
+      ? await env.DB.prepare(
+        "select id from user_subscription where user_id = ? and client_subscription_id = ? limit 1"
+      ).bind(identity.userId, input.clientSubscriptionId).first<{ id: string }>()
+      : null;
+    if (input.clientSubscriptionId && !subscription) {
+      throw new HttpError(422, "subscription_not_configured", "That subscription is not configured for this account.");
+    }
     const now = Date.now();
     const settings = await getSettings(env);
     const trust = trustForAccountAge(identity.profile.githubAccountCreatedAt, settings, now);
@@ -92,6 +100,7 @@ export const POST: APIRoute = async (context) => {
         deviceHash,
         cliContext: {
           installationId: identity.installationId,
+          subscriptionId: subscription?.id ?? null,
           sessionHash: input.sessionHash,
           tool: input.tool,
           rawModelLabel: input.rawModelLabel ?? null,

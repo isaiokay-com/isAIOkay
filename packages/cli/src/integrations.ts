@@ -264,7 +264,12 @@ export const IsAiOkay = async ({ client }) => {
             typeof info.providerID === "string" && typeof info.modelID === "string"
           ) {
             const sessionMessages = messages.get(info.sessionID) || new Map();
-            sessionMessages.set(info.id, { providerID: info.providerID, modelID: info.modelID });
+            sessionMessages.set(info.id, {
+              providerID: info.providerID,
+              modelID: info.modelID,
+              variant: typeof info.variant === "string" ? info.variant : null,
+              tokens: info.tokens && typeof info.tokens === "object" ? info.tokens : null
+            });
             messages.set(info.sessionID, sessionMessages);
           }
           return;
@@ -285,12 +290,21 @@ export const IsAiOkay = async ({ client }) => {
           .filter((candidate) => rootSession(candidate) === sessionID);
         const observed = new Map();
         for (const relatedSession of relatedSessions) {
-          for (const model of messages.get(relatedSession)?.values() || []) {
+          for (const [messageID, model] of messages.get(relatedSession)?.entries() || []) {
             observed.set(model.providerID + "/" + model.modelID, model);
+            if (model.tokens) {
+              await invoke({
+                event: "isaiokay.opencode.usage",
+                sessionID,
+                messageID,
+                ...model,
+                querySource: relatedSession === sessionID ? "main" : "subagent"
+              });
+            }
           }
         }
         for (const model of observed.values()) {
-          await invoke({ event: "isaiokay.opencode.model", sessionID, ...model });
+          await invoke({ event: "isaiokay.opencode.model", sessionID, providerID: model.providerID, modelID: model.modelID });
         }
         await invoke({ event: "session.idle", sessionID });
         for (const relatedSession of relatedSessions) {

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
   <title id="title">IsAIokay.com</title>
-  <desc id="desc">The AI coding models developers trust right now</desc>
+  <desc id="desc">The real value of AI coding subscriptions</desc>
   <rect width="1200" height="630" fill="#F8FAFC"/>
   <rect x="56" y="56" width="1088" height="518" rx="28" fill="#FFFFFF" stroke="#DCE2EA" stroke-width="2"/>
   <image href="logo-lockup-blue.png" x="96" y="100" width="420" height="64" preserveAspectRatio="xMinYMid meet"/>
@@ -8,12 +8,12 @@
     <circle cx="944" cy="132" r="6" fill="#2563EB"/>
     <text x="962" y="138" fill="#475569">LIVE SIGNAL</text>
   </g>
-  <text x="96" y="292" fill="#0D1420" font-family="Arial, sans-serif" font-size="60" font-weight="800" letter-spacing="-2">The AI coding models</text>
-  <text x="96" y="364" fill="#0D1420" font-family="Arial, sans-serif" font-size="60" font-weight="800" letter-spacing="-2">developers trust right now.</text>
+  <text x="96" y="292" fill="#0D1420" font-family="Arial, sans-serif" font-size="60" font-weight="800" letter-spacing="-2">What does your AI coding</text>
+  <text x="96" y="364" fill="#0D1420" font-family="Arial, sans-serif" font-size="60" font-weight="800" letter-spacing="-2">subscription actually deliver?</text>
   <line x1="96" y1="428" x2="1104" y2="428" stroke="#DCE2EA" stroke-width="2"/>
   <g font-family="Arial, sans-serif" font-size="21" font-weight="700">
-    <rect x="96" y="470" width="286" height="58" rx="10" fill="#EFF6FF" stroke="#BFDBFE"/><text x="116" y="507" fill="#1D4ED8">Live developer rankings</text>
-    <rect x="404" y="470" width="220" height="58" rx="10" fill="#F8FAFC" stroke="#DCE2EA"/><text x="439" y="507" fill="#334155">No lab scores</text>
-    <rect x="646" y="470" width="310" height="58" rx="10" fill="#F8FAFC" stroke="#DCE2EA"/><text x="674" y="507" fill="#334155">No synthetic benchmarks</text>
+    <rect x="96" y="470" width="286" height="58" rx="10" fill="#EFF6FF" stroke="#BFDBFE"/><text x="120" y="507" fill="#1D4ED8">Observed plan value</text>
+    <rect x="404" y="470" width="220" height="58" rx="10" fill="#F8FAFC" stroke="#DCE2EA"/><text x="438" y="507" fill="#334155">Real token usage</text>
+    <rect x="646" y="470" width="310" height="58" rx="10" fill="#F8FAFC" stroke="#DCE2EA"/><text x="681" y="507" fill="#334155">No prompts or code</text>
   </g>
 </svg>

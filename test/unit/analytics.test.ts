@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { isAnalyticsPath, postHogHost, postHogProjectKey, publicAnalyticsUrl } from "../../src/lib/analytics-policy";
 
 describe("analytics privacy policy", () => {
-  it("allows only the ranking and model page shapes", () => {
+  it("allows analytics only on the subscription-ranking homepage", () => {
     expect(isAnalyticsPath("/")).toBe(true);
-    expect(isAnalyticsPath("/openai/gpt-5")).toBe(true);
-    expect(isAnalyticsPath("/openai/gpt-5.6-sol")).toBe(true);
+    expect(isAnalyticsPath("/openai/gpt-5")).toBe(false);
+    expect(isAnalyticsPath("/openai/gpt-5.6-sol")).toBe(false);
     expect(isAnalyticsPath("/cli/authorize")).toBe(false);
     expect(isAnalyticsPath("/cli/verify/private-token")).toBe(false);
     expect(isAnalyticsPath("/u/developer")).toBe(false);

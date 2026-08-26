@@ -1,9 +1,9 @@
 import type { Env } from "../env";
 import { allActiveItems, archiveExpiredRiskData, getReportsForAggregation, getSettings, latestAggregateBefore, saveAggregate, saveAggregates } from "../db/repositories";
-import { regeneratePublicCache } from "../lib/cache";
 import { aggregateState, calculateScores, isEligibleScoreReport, qualifiesReleaseBaseline } from "../lib/scoring";
 import { cleanupCliTurnstileChallenges } from "./cli-turnstile";
 import { runCatalogDiscovery } from "./catalog-discovery";
+import { recalculateSubscriptionRankings } from "./subscription-aggregation";
 import type { Period } from "../types";
 
 const PERIOD_LENGTH: Record<Exclude<Period, "live">, number> = { "24h": 86_400_000, "7d": 7 * 86_400_000 };
@@ -191,16 +191,12 @@ export const runScheduledMaintenance = async (env: Env, now = Date.now()): Promi
   if (!lease) return { ran: false };
   try {
     await reconcileVotingSpikes(env, now);
-    await recalculatePeriod(env, "live", now);
-    await recalculatePeriod(env, "24h", now);
-    await recalculatePeriod(env, "7d", now);
-    await lockReleaseBaselines(env, now);
     await archiveExpiredRiskData(env, now);
     await cleanupCliTurnstileChallenges(env, now);
     // Nomination-only catalog discovery is failure-isolated inside the service,
     // so a broken feed can never prevent aggregation from completing.
     const discovery = await runCatalogDiscovery(env, now);
-    await regeneratePublicCache(env, now);
+    await recalculateSubscriptionRankings(env, now);
     return { ran: true, discovery };
   } finally {
     await releaseAggregationLock(env, lease);

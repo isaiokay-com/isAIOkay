@@ -3,16 +3,10 @@ const POSTHOG_HOSTS = new Set([
   "https://eu.i.posthog.com"
 ]);
 
-const modelPagePattern = /^\/[a-z0-9-]+\/[a-z0-9.-]+\/?$/;
-const privateRouteRoots = new Set(["admin", "api", "cli", "ph", "u"]);
 const publicProjectKeyPattern = /^phc_[A-Za-z0-9_-]{10,}$/;
 
-/** Analytics is limited to the public ranking and canonical model pages. */
-export const isAnalyticsPath = (pathname: string): boolean => {
-  if (pathname === "/") return true;
-  const routeRoot = pathname.split("/")[1];
-  return typeof routeRoot === "string" && routeRoot.length > 0 && !privateRouteRoots.has(routeRoot) && modelPagePattern.test(pathname);
-};
+/** Analytics is limited to the subscription-ranking landing page. */
+export const isAnalyticsPath = (pathname: string): boolean => pathname === "/";
 
 export const postHogHost = (configuredHost: string | undefined): string | null => {
   const normalized = configuredHost?.trim().replace(/\/$/, "") || "https://us.i.posthog.com";

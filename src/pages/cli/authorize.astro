@@ -12,7 +12,7 @@ const env = getRuntimeEnv(Astro.locals);
 const identity = await getCurrentIdentity(Astro.request, env);
 const userCode = Astro.url.searchParams.get("user_code") ?? "";
 ---
-<BaseLayout title="Connect the IsAIokay.com CLI" description="Authorize the privacy-preserving IsAIokay.com CLI to submit only the AI coding model ratings you confirm." noindex>
+<BaseLayout title="Connect the IsAIokay.com CLI" description="Authorize the privacy-preserving IsAIokay.com CLI to sync subscription telemetry and optional outcome check-ins you control." noindex>
   <Header />
   <main id="main-content" class="cli-auth-page">
     <section class="cli-auth-intro" aria-labelledby="cli-auth-title">

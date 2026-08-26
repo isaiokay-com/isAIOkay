@@ -7,9 +7,6 @@ type MockIdentity = "trusted" | "suspicious" | "blocked" | "admin";
 interface ItemPayload {
   id: string;
   slug: string;
-  type?: string;
-  developerCount?: number;
-  rankChange?: number | null;
 }
 
 interface FeedbackResult {
@@ -38,11 +35,11 @@ const signInAs = async (page: Page, identity: MockIdentity): Promise<void> => {
   expect(result.body).toMatchObject({ ok: true });
 };
 
-const rankedItems = async (page: Page): Promise<ItemPayload[]> => page.evaluate(async () => {
-  const response = await fetch("/api/items?period=7d", { credentials: "same-origin" });
-  const payload = await response.json() as { items: ItemPayload[] };
-  return payload.items;
-});
+const feedbackItems: ItemPayload[] = [
+  { id: "a0f6f4a8-5e76-4c62-a224-1db4de8b1012", slug: "gpt-5-6-sol" },
+  { id: "a0f6f4a8-5e76-4c62-a224-1db4de8b1013", slug: "gpt-5-6-terra" },
+  { id: "a0f6f4a8-5e76-4c62-a224-1db4de8b1014", slug: "gpt-5-6-luna" }
+];
 
 const submitFeedback = async (page: Page, trackedItemId: string, turnstileToken?: string): Promise<FeedbackResult> => page.evaluate(async ({ itemId, token }) => {
   const response = await fetch("/api/feedback", {
@@ -63,15 +60,7 @@ const submitFeedback = async (page: Page, trackedItemId: string, turnstileToken?
   return { status: response.status, body: await response.json() };
 }, { itemId: trackedItemId, token: turnstileToken });
 
-const waitForFeedbackIsland = async (page: Page): Promise<void> => {
-  await page.locator("dialog.feedback-dialog").waitFor({ state: "attached" });
-  await page.waitForFunction(() => {
-    const island = document.querySelector<HTMLElement>('astro-island[component-url*="FeedbackDialog"]');
-    return Boolean(island && !island.hasAttribute("ssr"));
-  });
-};
-
-test("the public utility renders and expands without JavaScript", async ({ browser }) => {
+test("the subscription utility renders without JavaScript", async ({ browser }) => {
   const page = await browser.newPage({ javaScriptEnabled: false });
   await page.goto("/");
 
@@ -79,18 +68,19 @@ test("the public utility renders and expands without JavaScript", async ({ brows
   await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", HOME_PAGE_DESCRIPTION);
   await expect(page.locator('meta[property="og:title"]')).toHaveAttribute("content", HOME_PAGE_TITLE);
   await expect(page.locator('meta[name="twitter:title"]')).toHaveAttribute("content", HOME_PAGE_TITLE);
-  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", "https://isaiokay.com/og-ai-coding-model-rankings.png");
-  await expect(page.locator('meta[name="twitter:image"]')).toHaveAttribute("content", "https://isaiokay.com/og-ai-coding-model-rankings.png");
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", "https://isaiokay.com/og-coding-subscription-rankings.png");
+  await expect(page.locator('meta[name="twitter:image"]')).toHaveAttribute("content", "https://isaiokay.com/og-coding-subscription-rankings.png");
   await expect(page.locator('meta[property="og:image:width"]')).toHaveAttribute("content", "1200");
   await expect(page.locator('meta[property="og:image:height"]')).toHaveAttribute("content", "630");
-  await expect(page.locator('meta[name="twitter:image:alt"]')).toHaveAttribute("content", /AI coding model rankings/i);
+  await expect(page.locator('meta[name="twitter:image:alt"]')).toHaveAttribute("content", /AI coding subscriptions/i);
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", "https://isaiokay.com/");
   await expect(page.locator('link[rel="describedby"]')).toHaveAttribute("href", "https://isaiokay.com/llms.txt");
   await expect(page.getByRole("heading", { name: HOME_PAGE_HEADING })).toBeVisible();
-  await expect(page.getByText("Real developers set the ranking. No lab scores. No synthetic benchmarks.", { exact: true })).toBeVisible();
-  expect(await page.locator(".ranking-table .ranking-row").count()).toBeGreaterThanOrEqual(5);
-  await expect(page.getByRole("button", { name: "Live" })).toHaveAttribute("data-active", "true");
-  await expect(page.getByRole("heading", { name: "Report from your terminal." })).toBeVisible();
+  await expect(page.getByText("Tokens, models, effort, quota burn, and price—measured across real coding sessions. Optional check-ins tell us whether the output was worth it.", { exact: true })).toBeVisible();
+  expect(await page.locator(".subscription-ranking tbody tr").count()).toBeGreaterThanOrEqual(4);
+  await expect(page.locator(".ranking-table, [data-feedback-item]")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Best coding subscriptions right now" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Measure what your plan actually gives you." })).toBeVisible();
   await expect(page.getByText("npm install --global @isaiokay/cli", { exact: true })).toBeVisible();
   await expect(page.locator(".cli-step--login code")).toHaveText("isaiokay");
   await expect(page.getByRole("link", { name: "View isaiokay-com/isAIOkay on GitHub" })).toHaveAttribute("href", "https://github.com/isaiokay-com/isAIOkay");
@@ -102,10 +92,6 @@ test("the public utility renders and expands without JavaScript", async ({ brows
   expect(structuredData["@graph"]?.map((entry) => entry["@type"])).toEqual(["Organization", "WebSite", "WebPage", "Dataset"]);
   expect(structuredData["@graph"]?.find((entry) => entry["@type"] === "WebPage")?.name).toBe(HOME_PAGE_TITLE);
 
-  const firstItem = page.locator(".ranking-table .ranking-row .rank-quick-view").first();
-  await firstItem.click();
-  await expect(page).toHaveURL(/item=/);
-  await expect(page.getByText("Recent experience evidence")).toBeVisible();
   await page.close();
 });
 
@@ -125,13 +111,13 @@ test("legal drafts are noindex and excluded from the sitemap", async ({ page, re
   expect(sitemap).not.toContain("https://isaiokay.com/terms");
 });
 
-test("llms.txt is a concise public index for language models", async ({ request }) => {
+test("llms.txt describes the subscription product", async ({ request }) => {
   const response = await request.get("/llms.txt");
   expect(response.ok()).toBe(true);
   expect(response.headers()["content-type"]).toContain("text/plain");
   const body = await response.text();
   expect(body).toContain("# IsAIokay.com");
-  expect(body).toContain("[Live AI coding model rankings](https://isaiokay.com/)");
+  expect(body).toContain("[Coding subscription rankings](https://isaiokay.com/)");
   expect(body).toContain("[Sitemap](https://isaiokay.com/sitemap.xml)");
   expect(body).not.toContain("https://isaiokay.com/api/");
 });
@@ -142,11 +128,11 @@ test("unknown routes use the branded 404 page", async ({ page }) => {
   await expect(page).toHaveTitle("Page not found | IsAIokay.com");
   await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex,nofollow");
   await expect(page.getByRole("heading", { name: "Page not found." })).toBeVisible();
-  await expect(page.getByRole("link", { name: "View model rankings" })).toHaveAttribute("href", "/");
+  await expect(page.getByRole("link", { name: "View subscription rankings" })).toHaveAttribute("href", "/");
 });
 
 test("the social preview image is publicly available", async ({ request }) => {
-  const response = await request.get("/og-ai-coding-model-rankings.png");
+  const response = await request.get("/og-coding-subscription-rankings.png");
   expect(response.ok()).toBe(true);
   expect(response.headers()["content-type"]).toBe("image/png");
   expect((await response.body()).byteLength).toBeGreaterThan(40_000);
@@ -159,16 +145,13 @@ test("responses include baseline browser security headers", async ({ request }) 
   expect(response.headers()["x-frame-options"]).toBe("DENY");
 });
 
-test("model period and sorting controls update the server-rendered ranking", async ({ page }) => {
+test("subscription periods update the server-rendered ranking", async ({ page }) => {
   await page.goto("/");
-  expect(await page.locator(".ranking-table .ranking-row").count()).toBeGreaterThanOrEqual(5);
-  await expect(page.getByRole("button", { name: "Agents" })).toHaveCount(0);
-  expect((await rankedItems(page)).every((item) => item.type === "model")).toBe(true);
-
-  await page.getByRole("button", { name: "24 hours" }).click();
-  await expect(page).toHaveURL(/period=24h/);
-  await page.locator('select[name="sort"]').selectOption("result");
-  await expect(page).toHaveURL(/sort=result/);
+  expect(await page.locator(".subscription-ranking tbody tr").count()).toBeGreaterThanOrEqual(4);
+  await page.getByRole("link", { name: "30d" }).click();
+  await expect(page).toHaveURL(/planPeriod=30d/);
+  await expect(page.locator(".subscription-heading nav a.active")).toHaveText("30d");
+  await expect(page.locator(".ranking-table, select[name='sort']")).toHaveCount(0);
 });
 
 test("a GitHub profile remains private and supports an optional self-declared X link", async ({ page, browser }) => {
@@ -198,18 +181,16 @@ test("a GitHub profile remains private and supports an optional self-declared X 
   await expect(publicPage.getByRole("tab")).toHaveCount(0);
   await expect(publicPage.getByRole("heading", { name: "Ratings", exact: true })).toBeVisible();
   await expect(publicPage.getByText(/Only structured ratings are shown/)).toBeVisible();
-  await expect(publicPage.getByRole("heading", { name: "Your experience belongs in the ranking." })).toBeVisible();
+  await expect(publicPage.getByRole("heading", { name: "Help reveal what coding subscriptions deliver." })).toBeVisible();
   await expect(publicPage.getByRole("button", { name: "Join with GitHub" })).toBeVisible();
-  await expect(publicPage.getByRole("link", { name: "Explore live rankings" })).toHaveAttribute("href", "/#ranking");
+  await expect(publicPage.getByRole("link", { name: "Explore subscription rankings" })).toHaveAttribute("href", "/#subscriptions");
   await expect(publicPage.locator('link[rel="canonical"]')).toHaveAttribute("href", "https://isaiokay.com/u/edge-builder");
+  await expect(publicPage.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex,nofollow");
   await expect(publicPage.locator('meta[property="og:type"]')).toHaveAttribute("content", "profile");
   await expect(publicPage.locator('meta[property="profile:username"]')).toHaveAttribute("content", "edge-builder");
   await expect(publicPage.locator('meta[property="og:image"]')).toHaveAttribute("content", `https://isaiokay.com/og/profile/edge-builder.png?v=${PROFILE_OG_IMAGE_VERSION}`);
-  const structuredData = JSON.parse(await publicPage.locator('script[type="application/ld+json"]').textContent() ?? "{}") as {
-    mainEntity?: { image?: string; sameAs?: string[] };
-  };
-  expect(structuredData.mainEntity?.sameAs).toEqual(["https://github.com/edge-builder", "https://x.com/edge_builder"]);
-  expect(await (await publicPage.request.get("/sitemap.xml")).text()).toContain("https://isaiokay.com/u/edge-builder");
+  await expect(publicPage.locator('script[type="application/ld+json"]')).toHaveCount(0);
+  expect(await (await publicPage.request.get("/sitemap.xml")).text()).not.toContain("https://isaiokay.com/u/edge-builder");
 
   const socialImage = await publicPage.request.get("/og/profile/edge-builder.png");
   expect(socialImage.ok()).toBe(true);
@@ -217,7 +198,7 @@ test("a GitHub profile remains private and supports an optional self-declared X 
   expect((await socialImage.body()).byteLength).toBeGreaterThan(20_000);
   await publicPage.close();
 
-  await expect(page.getByRole("heading", { name: "Your experience belongs in the ranking." })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Help reveal what coding subscriptions deliver." })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Edit profile" }).click();
   await settings.getByLabel("Public ratings").uncheck();
@@ -230,105 +211,26 @@ test("a GitHub profile remains private and supports an optional self-declared X 
   expect(await (await page.request.get("/sitemap.xml")).text()).not.toContain("https://isaiokay.com/u/edge-builder");
 });
 
-test("anonymous rating opens a sign-in control", async ({ page }) => {
-  await page.goto("/");
-  await waitForFeedbackIsland(page);
-  await page.locator(".ranking-row [data-feedback-item]").first().click();
-  await expect(page.getByText("Feedback is tied to a GitHub identity to keep the signal useful.")).toBeVisible();
-  await expect(page.getByRole("dialog").getByRole("button", { name: "Sign in with GitHub" })).toBeVisible();
-});
-
-test("the rating dialog fits supported viewport widths", async ({ page }) => {
+test("the retained outcome API still enforces duplicate and daily limits", async ({ page }) => {
   await page.goto("/");
   await signInAs(page, "trusted");
-  await page.reload();
-  await waitForFeedbackIsland(page);
+  await expect(page.locator("[data-feedback-item], dialog.feedback-dialog")).toHaveCount(0);
 
-  for (const width of [320, 375, 414, 768]) {
-    await page.setViewportSize({ width, height: 900 });
-    await page.locator("[data-feedback-item]").first().dispatchEvent("click");
-    const feedbackDialog = page.getByRole("dialog");
-    await expect(feedbackDialog).toBeVisible();
-    const bounds = await feedbackDialog.boundingBox();
-    expect(bounds).not.toBeNull();
-    expect(bounds!.x).toBeGreaterThanOrEqual(0);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-    await feedbackDialog.getByRole("button", { name: "Close feedback dialog" }).click();
-  }
-});
-
-test("a trusted user can submit two reports while duplicate and third reports are blocked", async ({ page }) => {
-  await page.goto("/");
-  await signInAs(page, "trusted");
-  await page.reload();
-  await expect(page.getByLabel("Feedback allowance")).toHaveText("2 ratings available");
-  const items = await rankedItems(page);
-  expect(items.length).toBeGreaterThanOrEqual(5);
-  expect(items.every((item) => Number.isInteger(item.developerCount) && (item.rankChange === null || Number.isInteger(item.rankChange)))).toBe(true);
-
-  // Exercise the interactive form once; the remaining allowance tests verify
-  // the actual API contract in the same authenticated browser context.
-  await waitForFeedbackIsland(page);
-  const firstRate = page.locator(".ranking-row [data-feedback-item]").first();
-  const submittedSlug = await firstRate.getAttribute("data-feedback-item");
-  const submittedItem = items.find((item) => item.slug === submittedSlug);
-  const remainingItems = items.filter((item) => item.slug !== submittedSlug);
-  expect(submittedItem).toBeDefined();
-  expect(remainingItems.length).toBeGreaterThanOrEqual(2);
-  await firstRate.click();
-  const feedbackDialog = page.getByRole("dialog");
-  await expect(feedbackDialog).toBeVisible();
-  let submittedAnswers: Record<string, unknown> | null = null;
-  page.on("request", (request) => {
-    if (request.method() === "POST" && request.url().endsWith("/api/feedback")) {
-      submittedAnswers = request.postDataJSON() as Record<string, unknown>;
-    }
-  });
-  await feedbackDialog.getByText("Add context").click();
-  await feedbackDialog.locator('select[name="agentItemId"]').selectOption({ label: "Cursor" });
-  await feedbackDialog.getByLabel("Result quality: 5 out of 5").check();
-  await feedbackDialog.getByLabel("Usage efficiency: 2 out of 5").check();
-  await feedbackDialog.getByRole("button", { name: "Save rating" }).click();
-  await expect(feedbackDialog).toBeHidden();
-  await expect(page.getByRole("status").filter({ hasText: "Rating saved" })).toContainText("1 remaining today");
-  expect(submittedAnswers).toMatchObject({
-    agentItemId: "a0f6f4a8-5e76-4c62-a224-1db4de8b1005",
-    resultQualityRating: 5,
-    usageEfficiencyRating: 2,
-    tags: []
-  });
-
-  await page.getByRole("button", { name: "Edit once · 10 min" }).click();
-  await expect(feedbackDialog).toBeVisible();
-  await expect(feedbackDialog.locator("#feedback-title")).toContainText(/^Edit /);
-  await expect(feedbackDialog.getByLabel("Result quality: 5 out of 5")).toBeChecked();
-  await expect(feedbackDialog.getByLabel("Usage efficiency: 2 out of 5")).toBeChecked();
-  let editedAnswers: Record<string, unknown> | null = null;
-  page.on("request", (request) => {
-    if (request.method() === "PATCH" && request.url().endsWith("/api/feedback")) {
-      editedAnswers = request.postDataJSON() as Record<string, unknown>;
-    }
-  });
-  await feedbackDialog.getByLabel("Result quality: 4 out of 5").check();
-  await feedbackDialog.getByRole("button", { name: "Update rating" }).click();
-  await expect(feedbackDialog).toBeHidden();
-  await expect(page.getByRole("status").filter({ hasText: "Rating updated" })).toBeVisible();
-  expect(editedAnswers).toMatchObject({ resultQualityRating: 4, usageEfficiencyRating: 2 });
-  await expect(page.getByRole("button", { name: "Edit once · 10 min" })).toHaveCount(0);
-
-  const duplicate = await submitFeedback(page, submittedItem!.id);
+  const first = await submitFeedback(page, feedbackItems[0]!.id);
+  expect(first.status).toBe(201);
+  expect(first.body.allowance?.remaining).toBe(1);
+  const duplicate = await submitFeedback(page, feedbackItems[0]!.id);
   expect(duplicate.status).toBe(409);
   expect(duplicate.body.code).toBe("item_already_rated");
 
-  const second = await submitFeedback(page, remainingItems[0]!.id);
+  const second = await submitFeedback(page, feedbackItems[1]!.id);
   expect(second.status).toBe(201);
   expect(second.body.allowance?.remaining).toBe(0);
 
   // The third rapid request is also an abnormal-velocity event. Supplying the
   // explicit local-only mock token lets this test reach the authoritative DO
   // allowance check rather than stopping at the preceding Turnstile gate.
-  const third = await submitFeedback(page, remainingItems[1]!.id, "mock-turnstile-pass");
+  const third = await submitFeedback(page, feedbackItems[2]!.id, "mock-turnstile-pass");
   expect(third.status).toBe(429);
   expect(third.body.code).toBe("allowance_exhausted");
 });
@@ -343,7 +245,7 @@ test("a suspicious account requires development Turnstile verification", async (
   expect(modal.status).toBe(200);
   expect(modal.body).toMatchObject({ authenticated: true, requiresTurnstile: true });
 
-  const [item] = await rankedItems(page);
+  const [item] = feedbackItems;
   const withoutToken = await submitFeedback(page, item!.id);
   expect(withoutToken.status).toBe(400);
   expect(withoutToken.body.error?.code).toBe("turnstile_required");
@@ -355,20 +257,19 @@ test("a suspicious account requires development Turnstile verification", async (
 test("a GitHub account younger than seven days cannot submit feedback", async ({ page }) => {
   await page.goto("/");
   await signInAs(page, "blocked");
-  const [item] = await rankedItems(page);
+  const [item] = feedbackItems;
   const result = await submitFeedback(page, item!.id, "mock-turnstile-pass");
   expect(result.status).toBe(403);
   expect(result.body.error?.code).toBe("github_account_too_new");
 });
 
-test("mobile cards are usable", async ({ page }) => {
+test("the subscription ranking remains usable on mobile", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
-  const firstCard = page.locator(".mobile-cards details").first();
-  await expect(firstCard).toBeVisible();
-  await firstCard.locator("summary").click();
-  await expect(firstCard.getByLabel(/\d+% confidence/)).toBeVisible();
-  await expect(firstCard.getByRole("link", { name: /Rate/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Best coding subscriptions right now" })).toBeVisible();
+  await expect(page.locator(".subscription-table-wrap")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await expect(page.locator(".ranking-table, .mobile-cards, [data-feedback-item]")).toHaveCount(0);
 });
 
 test("the CLI guide progressively reveals steps as the user copies commands", async ({ page }) => {
@@ -384,7 +285,7 @@ test("the CLI guide progressively reveals steps as the user copies commands", as
   });
   await page.goto("/#cli");
   const guide = page.locator("#cli");
-  await expect(guide.getByRole("heading", { name: "Report from your terminal." })).toBeVisible();
+  await expect(guide.getByRole("heading", { name: "Measure what your plan actually gives you." })).toBeVisible();
   await expect(guide.locator(".cli-step")).toHaveCount(3);
 
   const stepOnboarding = guide.locator(".cli-step--login");
@@ -408,7 +309,7 @@ test("the CLI guide progressively reveals steps as the user copies commands", as
   await guide.getByRole("button", { name: "Copy onboarding command" }).click();
   await expect(guide.getByRole("button", { name: "Copy onboarding command" })).toHaveText("Copied");
   await expect(stepUse).toBeVisible();
-  await expect(stepUse.locator("code")).toHaveText("codex");
+  await expect(stepUse.locator(".cli-command--ready > code")).toHaveText("codex");
 
   await guide.getByText("More setup options").click();
   await expect(guide.getByText("isaiokay setup --headless")).toBeVisible();
@@ -425,7 +326,7 @@ test("an administrator can moderate a submitted report", async ({ page }) => {
   await page.goto("/");
   await signInAs(page, "admin");
   await page.goto("/admin");
-  await expect(page.getByRole("heading", { name: "Moderation" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
   await page.getByLabel("Version label").fill("e2e-release");
   await page.getByLabel("Release date").fill("2030-01-01");
   await page.getByLabel("Official release source").fill("https://example.com/releases/e2e");

@@ -280,6 +280,9 @@ export const deleteOwnAccount = async (env: Env, userId: string, now = Date.now(
        where user_id = ?`
     ).bind(now, userId),
     env.DB.prepare("delete from feedback_context where user_id = ?").bind(userId),
+    env.DB.prepare("delete from usage_slice where user_id = ?").bind(userId),
+    env.DB.prepare("delete from quota_snapshot where user_id = ?").bind(userId),
+    env.DB.prepare("delete from user_subscription where user_id = ?").bind(userId),
     env.DB.prepare("delete from cli_turnstile_challenge where user_id = ?").bind(userId),
     env.DB.prepare("delete from cli_device_authorization where user_id = ?").bind(userId),
     env.DB.prepare("delete from cli_installation where user_id = ?").bind(userId),

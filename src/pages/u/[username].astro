@@ -4,7 +4,7 @@ import Header from "../../components/Header.astro";
 import ProfileRatingsList from "../../components/islands/ProfileRatingsList";
 import ProfileCommunityInvite from "../../components/islands/ProfileCommunityInvite";
 import ProfileVisibilityControl from "../../components/islands/ProfileVisibilityControl";
-import { getFeedbackAllowance, getPublicProfileView } from "../../db/repositories";
+import { getPublicProfileView } from "../../db/repositories";
 import { PROFILE_OG_IMAGE_VERSION } from "../../lib/profile-og";
 import { getRuntimeEnv } from "../../lib/runtime";
 import { getCurrentIdentity } from "../../services/auth";
@@ -18,10 +18,6 @@ const identity = await getCurrentIdentity(Astro.request, env);
 const profile = await getPublicProfileView(env, username, identity?.userId ?? null);
 if (!profile) Astro.response.status = 404;
 if (profile && username !== profile.username) return Astro.redirect(`/u/${encodeURIComponent(profile.username)}`, 301);
-
-const canRate = identity?.profile.status === "active" || identity?.profile.status === "admin";
-const allowance = profile?.isOwner && identity && canRate ? await getFeedbackAllowance(env, identity.userId) : null;
-const allowanceLabel = allowance?.remaining === 2 ? "You have 2 ratings available" : allowance?.remaining === 1 ? "You have 1 rating available" : null;
 
 const renderedAt = Date.now();
 const reportLabel = profile?.reportCount === 1 ? "1 model rating" : `${profile?.reportCount ?? 0} model ratings`;
@@ -68,14 +64,14 @@ const structuredData = profile?.isPublic ? {
   description={pageDescription}
   image={socialImage}
   imageAlt={profile ? `${profile.displayName}'s IsAIokay.com developer profile with their avatar and model ratings` : "Private developer profile"}
-  noindex={!profile || !profile.isPublic}
+  noindex
   type="profile"
   profileUsername={profile?.isPublic ? profile.username : undefined}
   structuredData={structuredData}
 >
   <Header />
   <main id="main-content" class="profile-page">
-    {!profile ? <section class="profile-empty"><h1>This profile is private</h1><p>The developer has not enabled public ratings.</p><a class="button-light" href="/">View model rankings</a></section> : <>
+    {!profile ? <section class="profile-empty"><h1>This profile is private</h1><p>The developer has not enabled public outcome history.</p><a class="button-light" href="/">View subscription rankings</a></section> : <>
       <section class="profile-card" aria-labelledby="profile-name">
         <div class="profile-card-main">
           <span class="profile-avatar">
@@ -115,21 +111,10 @@ const structuredData = profile?.isPublic ? {
         </dl>
       </section>
 
-      {allowanceLabel && <section class="profile-allowance-banner">
-        <span class="profile-allowance-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24"><path d="M20 8.5H4V12h16Z" /><path d="M5 12h14v7.5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1Z" /><path d="M12 8.5v12" /><path d="M12 8.5c-1.2 0-3.6-.4-4.6-1.9-.5-.75-.2-1.9.9-2.2 1.5-.4 3 1 3.7 4.1Z" /><path d="M12 8.5c1.2 0 3.6-.4 4.6-1.9.5-.75.2-1.9-.9-2.2-1.5-.4-3 1-3.7 4.1Z" /></svg>
-        </span>
-        <div class="profile-allowance-copy">
-          <strong>{allowanceLabel}</strong>
-          <p>Use your ratings to share structured feedback on the AI coding models you use.</p>
-        </div>
-        <a class="button-dark" href="/">Rate a model</a>
-      </section>}
-
       <div class="profile-content-grid">
         <section class="profile-models" aria-labelledby="used-models-title">
           <div class="profile-section-heading"><h2 id="used-models-title">Most reported</h2><p>Models ranked by this developer’s number of public ratings.</p></div>
-          {profile.mostUsedModels.length > 0 ? <ol class="profile-model-list">{profile.mostUsedModels.map((model, index) => <li><a href={`/?item=${model.slug}#item-${model.slug}`}><span>{String(index + 1).padStart(2, "0")}</span><strong>{model.name}</strong><small>{model.reports}</small></a></li>)}</ol> : <div class="profile-zero">
+          {profile.mostUsedModels.length > 0 ? <ol class="profile-model-list">{profile.mostUsedModels.map((model, index) => <li><span class="profile-model-entry"><span>{String(index + 1).padStart(2, "0")}</span><strong>{model.name}</strong><small>{model.reports}</small></span></li>)}</ol> : <div class="profile-zero">
             <span class="profile-zero-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="2.75" /><path d="M5 6v6c0 1.52 3.13 2.75 7 2.75s7-1.23 7-2.75V6" /><path d="M5 12v6c0 1.52 3.13 2.75 7 2.75s7-1.23 7-2.75v-6" /></svg></span>
             <p class="profile-zero-title">No models rated yet</p>
             <p class="profile-zero-copy">Once you rate models, the ones you contribute to most will appear here.</p>
@@ -143,7 +128,7 @@ const structuredData = profile?.isPublic ? {
             <span class="profile-zero-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5h16v11H9.5L5 20.5v-4H4Z" /></svg></span>
             <p class="profile-zero-title">No public ratings yet</p>
             <p class="profile-zero-copy">{profile.isOwner ? "Your public model ratings will appear here once you start contributing." : "This developer’s public model ratings will appear here once they start contributing."}</p>
-            {profile.isOwner && <a class="button-light" href="/">Explore model rankings</a>}
+            {profile.isOwner && <a class="button-light" href="/#subscriptions">Explore subscription rankings</a>}
           </div>}
         </section>
       </div>

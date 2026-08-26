@@ -1,7 +1,7 @@
 {
   "name": "@isaiokay/cli",
-  "version": "0.2.7",
-  "description": "Privacy-preserving local event bridge for IsAIokay.com",
+  "version": "0.3.0",
+  "description": "Privacy-preserving coding subscription token tracker for IsAIokay.com",
   "license": "MIT",
   "repository": {
     "type": "git",

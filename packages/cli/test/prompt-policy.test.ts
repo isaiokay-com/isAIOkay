@@ -23,6 +23,10 @@ const stateFor = (sessionHash: string): LocalState => {
     schemaVersion: 1,
     events: [start, end],
     pendingEventIds: [start.id, end.id],
+    usage: [],
+    pendingUsageIds: [],
+    quota: [],
+    pendingQuotaIds: [],
     rate: { nextAllowedAt: null, hookReminderShownAt: [], promptShownAt: [], promptsDisabled: false }
   };
 };

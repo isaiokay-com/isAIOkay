@@ -1,14 +1,14 @@
 # IsAIokay.com
 
-> IsAIokay.com publishes recent, community-sourced ratings of AI coding models from developers who have used them in real coding sessions.
+> IsAIokay.com measures the allowance and value delivered by AI coding subscriptions using privacy-safe metadata from real coding sessions.
 
-Ratings are structured feedback, not laboratory benchmarks. Recent reports carry more weight, and confidence rises with eligible evidence and independent developer participation. Public profile pages contain only ratings developers explicitly choose to share.
+The public ranking combines observed tokens, model and reasoning-effort mix, quota-window evidence, time-valid API-equivalent pricing, subscription price, and optional result satisfaction. Plans remain pending until privacy, coverage, and confidence thresholds are met.
 
 ## Primary resources
 
-- [Live AI coding model rankings](https://isaiokay.com/): Current model rankings, rating methodology, confidence signals, and instructions for submitting feedback.
-- [Methodology](https://isaiokay.com/#methodology): How ratings are weighted, moderated, and translated into confidence signals.
-- [Sitemap](https://isaiokay.com/sitemap.xml): Complete list of current public model and developer profile pages.
+- [Coding subscription rankings](https://isaiokay.com/): Current observed allowance, API-equivalent value, model mix, satisfaction, and evidence confidence.
+- [Methodology](https://isaiokay.com/#methodology): How prompt-free telemetry becomes privacy-thresholded subscription comparisons.
+- [Sitemap](https://isaiokay.com/sitemap.xml): Public pages intended for indexing.
 - [Source repository](https://github.com/isaiokay-com/isAIOkay): Open-source website and CLI implementation, documentation, and contribution history.
 
 ## Policies
@@ -18,4 +18,4 @@ Ratings are structured feedback, not laboratory benchmarks. Recent reports carry
 
 ## Optional
 
-- [CLI documentation](https://github.com/isaiokay-com/isAIOkay/blob/main/docs/cli.md): How the local CLI collects and submits confirmed ratings without collecting code or prompts.
+- [CLI documentation](https://github.com/isaiokay-com/isAIOkay/blob/main/docs/cli.md): How the local CLI tracks subscriptions, models, effort, tokens, and quota without collecting code or prompts.

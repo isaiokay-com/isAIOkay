@@ -7,6 +7,7 @@ import type { CurrentIdentity } from "./auth";
 const DEVICE_CODE_TTL_MS = 10 * 60_000;
 const INSTALLATION_TTL_MS = 365 * 24 * 60 * 60_000;
 const USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const CLI_SCOPES = ["allowance:read", "feedback:write", "subscriptions:write", "usage:write", "usage:read"] as const;
 
 const randomHex = (bytes: number): string => {
   const value = crypto.getRandomValues(new Uint8Array(bytes));
@@ -124,7 +125,7 @@ export const exchangeDeviceAuthorization = async (
     env.DB.prepare(
       `insert into cli_installation
         (id, user_id, label, token_hash, scopes_json, created_at, last_used_at, expires_at, revoked_at)
-       select ?, ?, ?, ?, '["allowance:read","feedback:write"]', ?, null, ?, null
+       select ?, ?, ?, ?, '["allowance:read","feedback:write","subscriptions:write","usage:write","usage:read"]', ?, null, ?, null
        from user_profile where user_id = ? and status in ('active', 'admin')
        on conflict(id) do nothing`
     ).bind(record.id, record.user_id, record.client_name, tokenHash, now, installationExpiresAt, record.user_id),
@@ -158,7 +159,7 @@ const getBearerToken = (request: Request): string | null => {
 export const requireCliIdentity = async (
   request: Request,
   env: Env,
-  requiredScope?: "allowance:read" | "feedback:write"
+  requiredScope?: typeof CLI_SCOPES[number]
 ): Promise<CliIdentity> => {
   const token = getBearerToken(request);
   if (!token) throw new HttpError(401, "cli_authentication_required", "Run `isaiokay login` to connect this CLI.");

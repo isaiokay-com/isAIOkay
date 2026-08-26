@@ -26,17 +26,9 @@ const withSecurityHeaders = (request: Request, response: Response): Response => 
 const publicCacheKey = (request: Request): Request | null => {
   if (request.method !== "GET") return null;
   const url = new URL(request.url);
-  const isItemsApi = url.pathname === "/api/items" || /^\/api\/items\/[^/]+$/.test(url.pathname);
-  const isPublicProfileAsset = /^\/og\/profile\/[^/]+\.png$/.test(url.pathname) || url.pathname === "/sitemap.xml";
-  if (!isItemsApi && !isPublicProfileAsset) return null;
-
-  if (url.pathname === "/api/items") {
-    const period = url.searchParams.get("period");
-    url.search = "";
-    if (period === "24h" || period === "7d") url.searchParams.set("period", period);
-  } else {
-    url.search = "";
-  }
+  const isPublicAsset = /^\/og\/profile\/[^/]+\.png$/.test(url.pathname) || url.pathname === "/sitemap.xml";
+  if (!isPublicAsset) return null;
+  url.search = "";
   return new Request(url.toString(), { method: "GET" });
 };
 

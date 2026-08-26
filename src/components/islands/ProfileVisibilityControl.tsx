@@ -121,7 +121,7 @@ export default function ProfileVisibilityControl({ initialPublic, initialXUserna
             <div className="profile-delete-warning">
               <strong>This cannot be undone.</strong>
               <p>Your public profile, GitHub identity, active sessions, and connected CLI installations will be removed. Optional notes, tags, and abuse-prevention identifiers will be erased.</p>
-              <p>Minimal de-identified rating records remain for ranking integrity, including the rated model, optional coding agent, numeric scores, source, timestamps, and scoring or moderation fields.</p>
+              <p>Minimal de-identified outcome records remain for aggregate integrity, including the reported model, optional coding agent, numeric scores, source, timestamps, and moderation fields.</p>
               <p>A secret-keyed, irreversible marker of your GitHub account remains so it cannot register again and reset voting limits.</p>
             </div>
             <label htmlFor="profile-delete-confirmation">Type <strong>{username}</strong> to confirm</label>

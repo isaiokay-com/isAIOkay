@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { atomicWriteJson, LocalStore } from "../src/storage.js";
-import type { StoredEvent } from "../src/types.js";
+import type { StoredEvent, StoredUsageSlice } from "../src/types.js";
 
 const event = (index: number): StoredEvent => ({
   schemaVersion: 1,
@@ -14,6 +14,37 @@ const event = (index: number): StoredEvent => ({
   model: "gpt-5.6-codex",
   sessionHash: "a".repeat(43),
   occurredAt: 1_700_000_000_000,
+  recordedAt: 1_700_000_000_100
+});
+
+const usage = (index: number): StoredUsageSlice => ({
+  schemaVersion: 1,
+  id: `10000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+  subscriptionId: "20000000-0000-4000-8000-000000000001",
+  provider: "codex",
+  tool: "codex",
+  sessionHash: "a".repeat(43),
+  requestHash: "b".repeat(42) + String(index % 10),
+  requestedModel: null,
+  reportedModel: "gpt-5.6-sol",
+  modelFamily: null,
+  modelVersion: null,
+  reasoningEffort: "high",
+  modelVariant: null,
+  serviceTier: null,
+  querySource: "main",
+  granularity: "turn",
+  attributionQuality: "exact",
+  tokenAttributionQuality: "exact",
+  modelAttributionQuality: "exact",
+  effortAttributionQuality: "exact",
+  inputTokens: 10,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  outputTokens: 5,
+  reasoningTokens: 2,
+  reportedTotalTokens: 15,
+  observedAt: 1_700_000_000_000,
   recordedAt: 1_700_000_000_100
 });
 
@@ -57,6 +88,18 @@ test("LocalStore records a foreground lifecycle pair in one state mutation", asy
   assert.deepEqual(state.pendingEventIds, [event(1).id, event(2).id]);
   await assert.rejects(store.recordEvents([event(3), { ...event(4), id: "invalid" }]), /invalid minimized event/);
   assert.deepEqual((await store.getState()).events.map(({ id }) => id), [event(1).id, event(2).id]);
+});
+
+test("re-scanning the same provider request never requeues synced telemetry", async (context) => {
+  const { directory, store } = await temporaryStore();
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const first = usage(1);
+  await store.recordTelemetry({ usage: [first] });
+  await store.completeTelemetry([first.id], []);
+  await store.recordTelemetry({ usage: [{ ...first, id: usage(2).id, recordedAt: first.recordedAt + 1 }] });
+  const state = await store.getState();
+  assert.deepEqual(state.usage.map(({ id }) => id), [first.id]);
+  assert.deepEqual(state.pendingUsageIds, []);
 });
 
 test("onboarding state distinguishes fresh installs from pre-onboarding configs", async (context) => {

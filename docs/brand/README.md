@@ -13,7 +13,7 @@ Production assets:
 - `/public/icon-192.png`: 192px installable-app icon
 - `/public/icon-512.png`: 512px installable-app icon
 - `/public/og.svg`: editable social-card source
-- `/public/og.png`: rendered Open Graph and X card
+- `/public/og-coding-subscription-rankings.png`: rendered Open Graph and X card
 
 The production wordmark is a high-resolution raster asset with no runtime font dependency. Browser and installable-app icons use the matching cobalt `AI` monogram.
 

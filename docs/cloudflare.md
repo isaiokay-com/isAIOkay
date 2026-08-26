@@ -8,7 +8,7 @@
 2. Create KV: `wrangler kv namespace create PUBLIC_CACHE`.
 3. Copy `wrangler.example.jsonc` to the ignored `wrangler.jsonc`, then place the returned IDs in that local file. In GitHub Actions, `scripts/prepare-cloudflare-config.mjs` builds the same ignored file from protected `CLOUDFLARE_DATABASE_ID` and `CLOUDFLARE_KV_NAMESPACE_ID` environment secrets. The public repository excludes the live assignments.
 4. Durable Object namespace `FEEDBACK_ALLOWANCE` is declared in the Worker configuration. Deploy once to apply its `v1` SQLite class migration.
-5. Configure the five account-unique Rate Limiting namespaces (`AUTH_RATE_LIMIT`, `FEEDBACK_MODAL_RATE_LIMIT`, `FEEDBACK_RATE_LIMIT`, `ALLOWANCE_RATE_LIMIT`, `ADMIN_RATE_LIMIT`). The supplied numeric IDs are the non-secret assignments used by this deployed project; forks need their own assignments.
+5. Configure the six account-unique Rate Limiting namespaces (`AUTH_RATE_LIMIT`, `FEEDBACK_MODAL_RATE_LIMIT`, `FEEDBACK_RATE_LIMIT`, `TELEMETRY_RATE_LIMIT`, `ALLOWANCE_RATE_LIMIT`, `ADMIN_RATE_LIMIT`). The supplied numeric IDs are the non-secret assignments used by this deployed project; forks need their own assignments.
 6. Create a Turnstile managed widget for the production hostname. The deployment workflow uploads `TURNSTILE_SECRET_KEY` as an encrypted Worker secret and injects the public `TURNSTILE_SITE_KEY` into the generated Wrangler `vars` configuration.
 7. The `*/10 * * * *` Cron Trigger is declared in Wrangler; deploy activates it.
 
@@ -33,11 +33,19 @@ Astro’s unused session storage is explicitly configured with an in-memory driv
 
 ## KV discipline
 
-Every written public payload includes `schemaVersion`, `generatedAt`, and `expiresAt`. The cron commits a complete D1 aggregate period first and then replaces its versioned KV payload. Feedback does not write a shared invalidation key: the existing aggregate remains the truthful public result until the next ten-minute calculation. Zod rejects malformed payloads, and pages survive KV misses or service errors because `loadPublicRanking()` reads D1.
+Every subscription-ranking payload includes `schemaVersion`, `generatedAt`, and
+`expiresAt`. Cron commits complete D1 snapshots before replacing the 7-, 30-,
+and 90-day KV values. Zod rejects malformed telemetry before storage, and a KV
+miss falls back to the latest completed D1 subscription snapshot without
+recalculating from raw user data during a public request.
 
-The named Worker Cache API stores only successful public item API responses for five minutes. Cache keys normalize the supported period query space; HTML is deliberately excluded because Astro server-island URLs are tied to a specific build and must not survive deployments in cached markup. Profiles, auth, feedback, CLI, and admin routes are also never stored. Public ranking payloads remain cached in KV, so normal page rendering does not repeatedly calculate rankings from reports.
+The named Worker Cache API is limited to successful sitemap and opted-in profile
+image responses. HTML is deliberately excluded because Astro server-island URLs
+are tied to a build and must not survive deployments in cached markup. Auth,
+feedback, CLI, telemetry, subscription, and admin routes are never stored.
 
-Never use KV for report allowances, auth, report idempotency, financial state, or moderation decisions.
+Never use KV for consent, raw usage, report allowances, auth, idempotency,
+financial state, or moderation decisions.
 
 ## Local emulation
 

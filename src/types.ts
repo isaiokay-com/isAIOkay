@@ -1,4 +1,5 @@
 export const CURRENT_SCHEMA_VERSION = 8 as const;
+export const SUBSCRIPTION_SCHEMA_VERSION = 1 as const;
 
 export type ItemType = "model" | "agent";
 export type Period = "live" | "24h" | "7d";
@@ -72,6 +73,58 @@ export interface PublicRankingPayload {
   expiresAt: string;
   items: RankingItem[];
   totalReports: number;
+}
+
+export type SubscriptionPeriod = "7d" | "30d" | "90d";
+
+export interface SubscriptionModelMix {
+  model: string;
+  reasoningEffort: string;
+  querySource: string;
+  contributorCount: number;
+  usageSliceCount: number;
+  exactSlicePercent: number;
+  observedTokens: number;
+  sharePercent: number;
+  apiEquivalentMicros: number | null;
+}
+
+export interface SubscriptionRankingItem {
+  id: string;
+  slug: string;
+  providerName: string;
+  name: string;
+  billingPeriod: "monthly" | "annual" | "weekly" | "other";
+  priceMicros: number | null;
+  currency: string;
+  officialUrl: string;
+  termsVersion: string | null;
+  termsLastVerifiedAt: number | null;
+  contributorCount: number;
+  subscriptionCount: number;
+  usageSliceCount: number;
+  completeWindowCount: number;
+  observedTokens: number;
+  medianTokensPerSubscription: number | null;
+  apiEquivalentMicros: number | null;
+  allowanceValueScore: number | null;
+  satisfactionScore: number | null;
+  satisfactionCount: number;
+  qualityAdjustedValueScore: number | null;
+  confidence: number;
+  exactSlicePercent: number;
+  changePercent: number | null;
+  methodologyVersion: string;
+  modelMix: SubscriptionModelMix[];
+}
+
+export interface PublicSubscriptionRankingPayload {
+  schemaVersion: typeof SUBSCRIPTION_SCHEMA_VERSION;
+  period: SubscriptionPeriod;
+  generatedAt: string;
+  expiresAt: string;
+  privacyMinimumContributors: number;
+  items: SubscriptionRankingItem[];
 }
 
 export interface ModelHistoryPoint {

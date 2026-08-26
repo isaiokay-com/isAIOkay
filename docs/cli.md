@@ -1,33 +1,33 @@
-# Session feedback CLI
+# Coding subscription telemetry CLI
 
-`isaiokay` is the opt-in collector for feedback at the point of use. Provider adapters emit a minimal local session candidate, and an eligible lifecycle hook can show a lightweight reminder that points to `isaiokay rate`. `isaiokay run` provides a provider-independent foreground wrapper that can open the questionnaire safely after any CLI harness exits. `isaiokay prompt` provides the foreground question and cadence controls. Hooks never submit feedback and never block an agent turn.
+`isaiokay` measures the included usage delivered by coding subscriptions. Provider adapters and local metadata scanners produce immutable token observations attributed to the actual model, reasoning effort or variant, and main/subagent/auxiliary source. Users may configure several subscriptions and bind a multi-provider harness such as OpenCode to different plans. `isaiokay run` collects and syncs after a managed foreground session; optional satisfaction reminders remain low-frequency and never block an agent turn.
 
 ## Privacy contract
 
-The collector is deliberately unable to persist or upload prompts, responses, transcript contents, code, diffs, commands, repository names, working directories, or raw provider session IDs. An installation-local secret HMACs the provider session identifier before it reaches the app-owned queue. Network payloads contain only tool, raw model label, attribution quality, coarse duration bucket, adapter version, the explicit rating, and the HMAC identifier used for idempotency.
+The collector reads provider-owned session records only to select allowlisted metadata. It cannot persist or upload prompts, responses, transcript content, code, diffs, commands, repository names, working directories, paths, credentials, or raw provider session/request IDs. An installation-local secret HMACs identifiers before they reach the app-owned queue. Strict network schemas accept only subscription/tool/model/effort/source labels, separate token counters, quota percentages, attribution quality, collector version, and timestamps. Unexpected fields reject the whole observation.
 
-Local configuration belongs under the platform configuration directory with user-only permissions. Hook credentials are never embedded in third-party hook JSON. Device authorization grants a revocable token scoped to `allowance:read` and `feedback:write`; it never copies a Better Auth cookie or X token into the CLI.
+Local configuration belongs under the platform configuration directory with user-only permissions. Hook credentials are never embedded in third-party hook JSON. Device authorization grants a revocable token scoped to `allowance:read`, `feedback:write`, `subscriptions:write`, `usage:write`, and `usage:read`; it never copies a Better Auth cookie or provider token into the CLI. Collection and community aggregation consent are separate per-subscription choices.
 
 ## Adapter truth table
 
-| Tool | Install mode | Completion signal | Model attribution | Policy |
+| Tool | Install mode | Usage source | Model / effort attribution | Policy |
 | --- | --- | --- | --- | --- |
-| Codex | Automatic owned hook | `Stop` / `SessionEnd` | Active `model` is included in hook input | Track changes and mark multi-model sessions mixed. |
-| Claude Code | Automatic merged hook | `SessionStart` plus later `Stop`/`SessionEnd` | Start model only | Require confirmation because `/model` changes are invisible later. |
+| Codex | Automatic owned hook + local scanner | Rollout `turn_context` and `token_count` records | Per-turn model and effort; reasoning tokens and separate quota scopes | Keep the corresponding last-turn token delta; never assign thread totals to one model. |
+| Claude Code | Automatic merged hook + local scanner | Assistant-message usage metadata | Exact model, effort, tier, input/output/cache counters, and sidechain source per request | Read only allowlisted message metadata; content is discarded. |
 | Cursor | Automatic merged hook | `sessionStart` plus `stop` | Documented `model`; `Auto` stays opaque | Record completed turns without using `followup_message`, which would submit another agent turn. |
-| OpenCode | Automatic isolated plugin | `session.idle` | Assistant `providerID` + `modelID` cached in plugin memory | Forward only an allowlisted envelope and notify with the native TUI toast. |
+| OpenCode | Automatic isolated plugin | Completed assistant messages emitted at `session.idle` | Exact `providerID`, `modelID`, variant, token buckets, and root/subagent source | Hash the message ID and preserve mixed providers/models. |
 | Gemini CLI | Automatic merged hook | `BeforeModel` plus `AfterAgent` | `llm_request.model` cached by session | Notify only after the completed agent turn. |
 | GitHub Copilot CLI | Automatic isolated hook | `agentStop` plus `sessionEnd` | Not exposed in documented payloads | Record unknown model without injecting or forcing an agent turn. |
 | Cline | Manual bridge | `TaskComplete` / `TaskCancel` | Provider and model slug at hook time | Do not mutate editor-managed configuration. |
 | Windsurf | Manual bridge | `post_cascade_response` | `model_name` when available | Debounce by trajectory; it is a per-response event. |
 | Amp | Automatic isolated plugin | `agent.end` | Usually unavailable | Use native `ctx.ui.notify`; require model confirmation. |
 | Aider | Manual wrapper | Process wrapper only | Initial flag/config only | Manual confirmation because `/model` can change it. |
-| Grok Build | Automatic isolated hook | `SessionStart` plus genuine `Stop` (`reason: end_turn`) | Not retained from lifecycle input | Ignore the extra shutdown Stop and never return a gate decision. |
+| Grok Build | Automatic isolated hook + local scanner | Per-prompt `updates.jsonl` usage and model split | Exact per-model counters; effort exact when history is unambiguous, otherwise inferred/unknown | Preserve every `modelUsage` entry rather than assigning the prompt to the current model. |
 | Qwen Code | Automatic merged hook | `SessionStart` plus `Stop`/`SessionEnd` | Start model only | Preselect the documented model but require confirmation because it can change later. |
 | Kimi Code | Automatic owned TOML block | `SessionStart` plus `Stop`/`SessionEnd` | Start model only | Record lifecycle activity silently; preselect and confirm the start model. |
 | Muse Code | Manual wrapper | Foreground process exit | Manual confirmation | Meta's installer verifies the `muse` command, but no stable public lifecycle hook contract is available yet. |
 
-Roo Code is intentionally excluded from new integration work because its official extension and repository were retired in 2026. Tools without a stable lifecycle API use the generic/manual adapter instead of filesystem or transcript scraping.
+Roo Code is intentionally excluded from new integration work because its official extension and repository were retired in 2026. Tools without a stable token metadata surface remain feedback-only or manual. A provider is marked supported for subscription measurement only after fixtures verify its counter semantics and model/effort attribution.
 
 ## First-run setup and login
 
@@ -64,14 +64,14 @@ isaiokay setup --headless
 isaiokay authorize ABCD-EFGH
 ```
 
-The authenticated CLI approves only that one-time code. No long-lived credential is printed, copied, passed on the command line, or shared between machines. A first installation still requires the X authorization page to establish the account; after that, any additional terminal can be connected entirely from the CLI. Set `ISAI_OKAY_HEADLESS=1` or pass `--headless` to force terminal mode; set `ISAI_OKAY_BROWSER=1` to force a browser launch attempt.
+The authenticated CLI approves only that one-time code. No long-lived credential is printed, copied, passed on the command line, or shared between machines. A first installation still requires the GitHub authorization page to establish the account; after that, any additional terminal can be connected entirely from the CLI. Set `ISAI_OKAY_HEADLESS=1` or pass `--headless` to force terminal mode; set `ISAI_OKAY_BROWSER=1` to force a browser launch attempt.
 
 Interactive terminals receive a guided, colored login flow. Use `--no-color` or
 set `NO_COLOR` to disable color. Redirected output stays machine-readable, and
 `isaiokay login --json` explicitly emits the authorization and success events as
 newline-delimited JSON.
 
-After login succeeds, an interactive terminal safely checks `PATH` for Codex,
+After login succeeds, the CLI offers the server-owned market plan catalog and asks explicitly whether selected subscriptions may contribute to privacy-thresholded community aggregates. It then safely checks `PATH` for Codex,
 Claude Code, Cursor, OpenCode, Gemini CLI, GitHub Copilot CLI, Amp, Grok Build,
 Qwen Code, and Kimi Code. Detected automatic integrations
 that are not already configured appear in an optional checklist: use Space to
@@ -132,6 +132,16 @@ isaiokay run kimi
 isaiokay run muse
 isaiokay run <provider> --command <executable> -- <arguments...>
 isaiokay doctor
+isaiokay subscription list
+isaiokay subscription add --provider claude --plan "Claude Max 5x" --plan-slug claude-max-5x --price 100 --share
+isaiokay subscription bind opencode:anthropic <subscription-id>
+isaiokay subscription consent <subscription-id> off
+isaiokay collect
+isaiokay usage
+isaiokay usage --cloud --period all
+isaiokay sync
+isaiokay export > isaiokay-export.json
+isaiokay telemetry delete --yes
 isaiokay allowance
 isaiokay prompt
 isaiokay rate
@@ -203,29 +213,25 @@ and are never stored or uploaded. Windows `.cmd` and `.bat` launchers use
 platform-safe resolution and escaping rather than constructing a command line
 from user input.
 
-Native hooks remain useful for model attribution. While a harness is wrapped,
-its hooks join the foreground session. A safe post-turn hook may show the daily
-reminder immediately, so a long-running process does not need to exit first.
-Claude Code's documented `SessionStart` model is retained for a confidently
-matched session; because Claude can switch models after startup, the developer
-can still correct that selection before submitting. Model choices are scoped to
-the vendor only when a just-finished or same-shell session proves a fixed-provider
-harness (for example, Anthropic for Claude Code and OpenAI for Codex). A plain
-`isaiokay rate` instead asks for a harness and shows the full model catalog.
-Multi-provider harnesses such as Qwen Code and Kimi Code also keep the full
-eligible catalog. OpenCode shows the exact observed models when
-they all resolve to the catalog and falls back to the broader catalog when they
-do not. If a harness exposes no safe model signal, the selector asks the
-developer to confirm it. A detached editor launcher cannot be timed by
-a process wrapper, so editor-native integrations continue to use their documented bridge.
+Native hooks remain useful for lifecycle reminders, while telemetry adapters use
+the smallest provider-owned usage record that can safely tie counters to a model.
+Claude assistant-message records preserve model switches inside a session. Codex
+turn context is paired with the corresponding last-turn token delta. OpenCode
+emits one observation per completed assistant message, including the exact
+provider, model, variant, and root/subagent source. These machine facts never
+depend on the model confirmed in an optional terminal check-in. If a tool exposes only
+lifecycle metadata, it remains feedback-only and its activity is not counted as
+subscription usage. A detached editor launcher cannot be timed by a process
+wrapper, so editor-native integrations continue to use their documented bridge.
 
-Grok Build session detection uses xAI's personal `SessionStart` and `Stop`
+Grok Build lifecycle detection uses xAI's personal `SessionStart` and `Stop`
 hooks in `~/.grok/hooks/isaiokay.json` (or `$GROK_HOME/hooks/isaiokay.json` when
-`GROK_HOME` is set). The collector retains only an HMAC of Grok's `sessionId`
-and lifecycle timestamps; `cwd`, `workspaceRoot`, transcript content, prompts,
-and responses are discarded. Because Grok's documented lifecycle envelope does
-not identify the active model, the rating flow asks for confirmation and limits
-the choices to current xAI models.
+`GROK_HOME` is set). Subscription telemetry comes separately from the session's
+`updates.jsonl` model-usage summary. The collector keeps the exact counters for
+every listed model and uses `chat_history.jsonl` only to determine whether an
+effort label is unambiguous; content is discarded immediately. The CLI retains
+only HMACs of session and request IDs. `cwd`, `workspaceRoot`, transcript content,
+prompts, and responses are never persisted or uploaded.
 
 Qwen Code merges owned `SessionStart`, `Stop`, and `SessionEnd` groups into
 `~/.qwen/settings.json`. Its documented start envelope includes `model`, which
@@ -312,17 +318,27 @@ The repository installer requires Node 22+, downloads the selected public GitHub
 
 Codex, Claude Code, Cursor, Gemini CLI, and Qwen Code use carefully merged lifecycle hook groups. OpenCode, Copilot, Amp, and Grok Build use isolated app-owned files or plugins. Kimi Code uses a clearly marked TOML block. Existing configuration is preserved, malformed JSON or managed markers fail closed, and uninstall removes only IsAIokay.com-owned entries. Cline, Windsurf, Aider, and Muse Code return explicit manual bridge or wrapper instructions because their safest integration requires an editor-specific UI workflow, debounce layer, process wrapper, or a lifecycle API that is not yet public.
 
-## Attribution and scoring
+## Subscription attribution and scoring
+
+Subscription telemetry is attached first to a user-configured subscription and
+then split by observed model, reasoning effort or variant, and query source.
+Token, model, and effort attribution have separate quality flags, so an exact
+model/token split does not become inferred merely because effort is unknown.
+Public rankings use per-subscription medians, time-valid model prices, complete
+quota-window evidence, and a five-contributor publication threshold. Optional
+satisfaction is a distinct quality signal and contributes only 25% of the
+quality-adjusted value score; it never changes observed tokens.
+
+## Feedback attribution
 
 The server, not the CLI, maps a raw model label to `tracked_item`. `model_alias` provides versioned per-tool mappings. Unknown labels, opaque routing, and mixed sessions return a confirmation-required response with the active model catalog. The host agent is stored separately as report context and is never ranked in place of a model. A client cannot submit an authoritative tracked-item ID.
 
-CLI feedback uses the same trust weight, Turnstile policy, Rate Limiting binding, two-per-day rolling allowance, one-item-per-window limit, moderation, and scheduled aggregation as browser feedback. When Turnstile is required, the CLI opens a short-lived browser challenge, polls only its status, and retries the in-memory report with a single-use proof. The challenge stores no rating payload. CLI provenance does not receive additional trust weight.
+CLI feedback uses the existing trust weight, Turnstile policy, Rate Limiting binding, two-per-day rolling allowance, one-item-per-window limit, and moderation safeguards. When Turnstile is required, the CLI opens a short-lived browser challenge, polls only its status, and retries the in-memory report with a single-use proof. The challenge stores no rating payload. CLI provenance does not receive additional trust weight.
 
-The website and CLI collect the same two answers: result quality and usage
-efficiency. Neither asks the developer to estimate a trend; movement is derived
-from repeated ratings over time. The terminal check-in optimizes for completion
-by putting the detected model and both answers on one screen. Both surfaces use
-the same privacy, trust, moderation, and aggregation pipeline.
+The public website no longer exposes a separate model-rating flow. The terminal
+check-in remains an optional subscription outcome signal and puts the detected
+model plus result-quality questions on one screen. It never asks the developer
+to estimate a plan trend and never changes observed token or quota facts.
 
 ## Prompt policy
 

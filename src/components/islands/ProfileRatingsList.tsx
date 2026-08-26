@@ -60,7 +60,7 @@ export default function ProfileRatingsList({ initialReports, initialCursor, user
         {reports.map((report, index) => (
           <article key={`${report.submittedAt}-${report.modelSlug}-${index}`}>
             <div className="profile-report-model">
-              <a href={`/?item=${report.modelSlug}#item-${report.modelSlug}`}>{report.modelName}</a>
+              <strong>{report.modelName}</strong>
               <span>{report.providerName}{report.agentName ? ` · via ${report.agentName}` : ""}</span>
             </div>
             <div className="profile-report-score"><strong>{ratingAverage(report)}</strong><span>overall</span></div>

@@ -1,4 +1,4 @@
-import type { ApiTrackedItem, CliCredential } from "./types.js";
+import type { ApiTrackedItem, CliCredential, LocalSubscription, StoredQuotaSnapshot, StoredUsageSlice } from "./types.js";
 
 export class ApiError extends Error {
   constructor(
@@ -210,6 +210,204 @@ export const submitFeedback = async (
   method: "POST",
   body: JSON.stringify(payload)
 });
+
+export const upsertSubscription = async (
+  fetcher: Fetch,
+  credential: CliCredential,
+  subscription: LocalSubscription
+): Promise<void> => {
+  const body = await credentialRequest(fetcher, credential, "/api/cli/subscriptions", {
+    method: "POST",
+    body: JSON.stringify({
+      clientSubscriptionId: subscription.id,
+      providerName: subscription.providerName,
+      planLabel: subscription.planLabel,
+      ...(subscription.planSlug ? { planSlug: subscription.planSlug } : {}),
+      billingPeriod: subscription.billingPeriod,
+      priceMicros: subscription.priceMicros,
+      currency: subscription.currency,
+      startedAt: subscription.startedAt,
+      endedAt: subscription.endedAt,
+      aggregateConsent: subscription.aggregateConsent
+    })
+  });
+  if (typeof body.subscription !== "object" || body.subscription === null) {
+    throw new ApiError(502, "invalid_server_response", "The server returned an invalid subscription response.");
+  }
+};
+
+export interface ApiSubscriptionPlan {
+  slug: string;
+  providerName: string;
+  name: string;
+  billingPeriod: "monthly" | "annual" | "weekly" | "other";
+  priceMicros: number | null;
+  currency: string;
+}
+
+export const getSubscriptionPlans = async (fetcher: Fetch, credential: CliCredential): Promise<ApiSubscriptionPlan[]> => {
+  const body = await credentialRequest(fetcher, credential, "/api/cli/subscriptions", { method: "GET" });
+  if (!Array.isArray(body.plans)) throw new ApiError(502, "invalid_server_response", "The server returned an invalid subscription catalog.");
+  return body.plans.flatMap((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
+    const plan = value as Record<string, unknown>;
+    if (
+      typeof plan.slug !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(plan.slug) ||
+      typeof plan.providerName !== "string" || plan.providerName.length < 1 || plan.providerName.length > 80 ||
+      typeof plan.name !== "string" || plan.name.length < 1 || plan.name.length > 100 ||
+      (plan.billingPeriod !== "monthly" && plan.billingPeriod !== "annual" && plan.billingPeriod !== "weekly" && plan.billingPeriod !== "other") ||
+      (plan.priceMicros !== null && (!Number.isSafeInteger(plan.priceMicros) || (plan.priceMicros as number) < 0 || (plan.priceMicros as number) > 1_000_000_000_000)) ||
+      typeof plan.currency !== "string" || !/^[A-Z]{3}$/.test(plan.currency)
+    ) return [];
+    return [{
+      slug: plan.slug,
+      providerName: stripTerminalControls(plan.providerName),
+      name: stripTerminalControls(plan.name),
+      billingPeriod: plan.billingPeriod,
+      priceMicros: plan.priceMicros as number | null,
+      currency: plan.currency
+    }];
+  });
+};
+
+const usagePayload = (entry: StoredUsageSlice): Record<string, unknown> => ({
+  clientEventId: entry.id,
+  clientSubscriptionId: entry.subscriptionId,
+  tool: entry.tool,
+  sessionHash: entry.sessionHash,
+  requestHash: entry.requestHash,
+  requestedModel: entry.requestedModel,
+  reportedModel: entry.reportedModel,
+  modelFamily: entry.modelFamily,
+  modelVersion: entry.modelVersion,
+  reasoningEffort: entry.reasoningEffort,
+  modelVariant: entry.modelVariant,
+  serviceTier: entry.serviceTier,
+  querySource: entry.querySource,
+  granularity: entry.granularity,
+  attributionQuality: entry.attributionQuality,
+  tokenAttributionQuality: entry.tokenAttributionQuality,
+  modelAttributionQuality: entry.modelAttributionQuality,
+  effortAttributionQuality: entry.effortAttributionQuality,
+  inputTokens: entry.inputTokens,
+  cacheReadTokens: entry.cacheReadTokens,
+  cacheWriteTokens: entry.cacheWriteTokens,
+  outputTokens: entry.outputTokens,
+  reasoningTokens: entry.reasoningTokens,
+  reportedTotalTokens: entry.reportedTotalTokens,
+  observedAt: entry.observedAt,
+  collectorVersion: "0.3.0"
+});
+
+const quotaPayload = (entry: StoredQuotaSnapshot): Record<string, unknown> => ({
+  clientEventId: entry.id,
+  clientSubscriptionId: entry.subscriptionId,
+  quotaScope: entry.quotaScope,
+  windowKind: entry.windowKind,
+  usedPercent: entry.usedPercent,
+  remainingPercent: entry.remainingPercent,
+  resetAt: entry.resetAt,
+  attributionQuality: entry.attributionQuality,
+  observedAt: entry.observedAt,
+  collectorVersion: "0.3.0"
+});
+
+export const uploadTelemetry = async (
+  fetcher: Fetch,
+  credential: CliCredential,
+  usage: StoredUsageSlice[],
+  quota: StoredQuotaSnapshot[]
+): Promise<{ accepted: number; duplicates: number }> => {
+  const body = await credentialRequest(fetcher, credential, "/api/cli/telemetry", {
+    method: "POST",
+    body: JSON.stringify({ usage: usage.map(usagePayload), quota: quota.map(quotaPayload) })
+  });
+  if (!Number.isInteger(body.accepted) || (body.accepted as number) < 0 || (body.accepted as number) > 100 ||
+    !Number.isInteger(body.duplicates) || (body.duplicates as number) < 0 || (body.duplicates as number) > 100 ||
+    (body.accepted as number) + (body.duplicates as number) !== usage.length + quota.length
+  ) {
+    throw new ApiError(502, "invalid_server_response", "The server returned an invalid telemetry response.");
+  }
+  return { accepted: body.accepted as number, duplicates: body.duplicates as number };
+};
+
+export interface CloudUsageRow {
+  clientSubscriptionId: string;
+  planLabel: string;
+  providerName: string;
+  reportedModel: string;
+  reasoningEffort: string;
+  querySource: string;
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  observedTokens: number;
+  usageSliceCount: number;
+  firstObservedAt: number;
+  lastObservedAt: number;
+}
+
+export const getCloudUsage = async (
+  fetcher: Fetch,
+  credential: CliCredential,
+  period: "7d" | "30d" | "90d" | "all"
+): Promise<CloudUsageRow[]> => {
+  const body = await credentialRequest(fetcher, credential, `/api/cli/usage?period=${period}`, { method: "GET" });
+  if (!Array.isArray(body.rows)) throw new ApiError(502, "invalid_server_response", "The server returned an invalid usage summary.");
+  return body.rows.flatMap((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
+    const row = value as Record<string, unknown>;
+    const texts = ["clientSubscriptionId", "planLabel", "providerName", "reportedModel", "reasoningEffort", "querySource"] as const;
+    const numbers = ["inputTokens", "cacheReadTokens", "cacheWriteTokens", "outputTokens", "reasoningTokens", "observedTokens", "usageSliceCount", "firstObservedAt", "lastObservedAt"] as const;
+    if (!texts.every((key) => typeof row[key] === "string") ||
+      !isUuid(row.clientSubscriptionId) ||
+      !["main", "subagent", "auxiliary", "background", "unknown"].includes(row.querySource as string) ||
+      !numbers.every((key) => Number.isSafeInteger(row[key]) && (row[key] as number) >= 0)
+    ) return [];
+    return [{
+      clientSubscriptionId: row.clientSubscriptionId as string,
+      planLabel: stripTerminalControls(row.planLabel as string),
+      providerName: stripTerminalControls(row.providerName as string),
+      reportedModel: stripTerminalControls(row.reportedModel as string),
+      reasoningEffort: stripTerminalControls(row.reasoningEffort as string),
+      querySource: row.querySource as string,
+      inputTokens: row.inputTokens as number,
+      cacheReadTokens: row.cacheReadTokens as number,
+      cacheWriteTokens: row.cacheWriteTokens as number,
+      outputTokens: row.outputTokens as number,
+      reasoningTokens: row.reasoningTokens as number,
+      observedTokens: row.observedTokens as number,
+      usageSliceCount: row.usageSliceCount as number,
+      firstObservedAt: row.firstObservedAt as number,
+      lastObservedAt: row.lastObservedAt as number
+    }];
+  });
+};
+
+export const deleteRemoteTelemetry = async (
+  fetcher: Fetch,
+  credential: CliCredential,
+  includeSubscriptions: boolean
+): Promise<{ usageDeleted: number; quotaDeleted: number; subscriptionsDeleted: number }> => {
+  const body = await credentialRequest(fetcher, credential, "/api/cli/telemetry", {
+    method: "DELETE",
+    body: JSON.stringify({ includeSubscriptions })
+  });
+  if (body.deleted !== true ||
+    !Number.isInteger(body.usageDeleted) || (body.usageDeleted as number) < 0 ||
+    !Number.isInteger(body.quotaDeleted) || (body.quotaDeleted as number) < 0 ||
+    !Number.isInteger(body.subscriptionsDeleted) || (body.subscriptionsDeleted as number) < 0
+  ) {
+    throw new ApiError(502, "invalid_server_response", "The server returned an invalid telemetry deletion response.");
+  }
+  return {
+    usageDeleted: body.usageDeleted as number,
+    quotaDeleted: body.quotaDeleted as number,
+    subscriptionsDeleted: body.subscriptionsDeleted as number
+  };
+};
 
 export interface CliTurnstileChallengeStatus {
   id: string;

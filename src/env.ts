@@ -6,6 +6,7 @@ export interface Env {
   AUTH_RATE_LIMIT: RateLimitBinding;
   FEEDBACK_MODAL_RATE_LIMIT: RateLimitBinding;
   FEEDBACK_RATE_LIMIT: RateLimitBinding;
+  TELEMETRY_RATE_LIMIT: RateLimitBinding;
   ALLOWANCE_RATE_LIMIT: RateLimitBinding;
   ADMIN_RATE_LIMIT: RateLimitBinding;
   BETTER_AUTH_SECRET: string;

@@ -1,7 +1,7 @@
 {
   "name": "IsAIokay.com",
   "short_name": "IsAIokay.com",
-  "description": "Live AI coding model rankings based on recent ratings from real developers.",
+  "description": "Observed allowance and value rankings for AI coding subscriptions based on privacy-safe usage metadata.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",

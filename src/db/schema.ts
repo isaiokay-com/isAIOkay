@@ -248,7 +248,7 @@ export const cliInstallation = sqliteTable(
     userId: text("user_id").notNull().references(() => authUser.id, { onDelete: "cascade" }),
     label: text("label").notNull(),
     tokenHash: text("token_hash").notNull(),
-    scopesJson: text("scopes_json").notNull().default('["allowance:read","feedback:write"]'),
+    scopesJson: text("scopes_json").notNull().default('["allowance:read","feedback:write","subscriptions:write","usage:write","usage:read"]'),
     createdAt: integer("created_at").notNull(),
     lastUsedAt: integer("last_used_at"),
     expiresAt: integer("expires_at").notNull(),
@@ -310,6 +310,7 @@ export const feedbackContext = sqliteTable(
     id: text("id").primaryKey(),
     userId: text("user_id").notNull().references(() => authUser.id, { onDelete: "cascade" }),
     installationId: text("installation_id").notNull().references(() => cliInstallation.id, { onDelete: "cascade" }),
+    subscriptionId: text("subscription_id"),
     trackedItemId: text("tracked_item_id").notNull().references(() => trackedItem.id, { onDelete: "restrict" }),
     sessionHash: text("session_hash").notNull(),
     tool: text("tool").notNull(),
@@ -322,7 +323,227 @@ export const feedbackContext = sqliteTable(
   (table) => [
     uniqueIndex("feedback_context_session_unique").on(table.installationId, table.sessionHash),
     index("feedback_context_item_tool_idx").on(table.trackedItemId, table.tool, table.createdAt),
+    index("feedback_context_subscription_idx").on(table.subscriptionId, table.createdAt),
     index("feedback_context_user_idx").on(table.userId, table.createdAt)
+  ]
+);
+
+/**
+ * A market plan, not an individual account. Public comparisons are grouped by
+ * this table so "Claude Max 5x" never gets mixed with "Claude Max 20x" or a
+ * metered API account. The row identifies the market tier; termsVersion records
+ * which public terms were verified, while daily aggregates preserve history.
+ */
+export const subscriptionPlan = sqliteTable(
+  "subscription_plan",
+  {
+    id: text("id").primaryKey(),
+    slug: text("slug").notNull(),
+    providerName: text("provider_name").notNull(),
+    name: text("name").notNull(),
+    billingPeriod: text("billing_period", { enum: ["monthly", "annual", "weekly", "other"] }).notNull().default("monthly"),
+    priceMicros: integer("price_micros"),
+    currency: text("currency").notNull().default("USD"),
+    officialUrl: text("official_url").notNull(),
+    termsVersion: text("terms_version"),
+    termsLastVerifiedAt: integer("terms_last_verified_at"),
+    isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull()
+  },
+  (table) => [
+    uniqueIndex("subscription_plan_slug_unique").on(table.slug),
+    index("subscription_plan_active_provider_idx").on(table.isActive, table.providerName, table.name)
+  ]
+);
+
+/** A user's private instance of a coding subscription configured in the CLI. */
+export const userSubscription = sqliteTable(
+  "user_subscription",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull().references(() => authUser.id, { onDelete: "cascade" }),
+    planId: text("plan_id").references(() => subscriptionPlan.id, { onDelete: "set null" }),
+    clientSubscriptionId: text("client_subscription_id").notNull(),
+    providerName: text("provider_name").notNull(),
+    planLabel: text("plan_label").notNull(),
+    billingPeriod: text("billing_period", { enum: ["monthly", "annual", "weekly", "other"] }).notNull().default("monthly"),
+    priceMicros: integer("price_micros"),
+    currency: text("currency").notNull().default("USD"),
+    startedAt: integer("started_at"),
+    endedAt: integer("ended_at"),
+    aggregateConsent: integer("aggregate_consent", { mode: "boolean" }).notNull().default(false),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull()
+  },
+  (table) => [
+    uniqueIndex("user_subscription_client_unique").on(table.userId, table.clientSubscriptionId),
+    index("user_subscription_plan_consent_idx").on(table.planId, table.aggregateConsent, table.endedAt),
+    index("user_subscription_user_active_idx").on(table.userId, table.endedAt)
+  ]
+);
+
+/**
+ * Immutable, prompt-free token evidence. One row is the smallest reliable
+ * native unit exposed by a harness: request, message, turn, or model/session
+ * total. Model or effort changes therefore create new rows inside a session.
+ */
+export const usageSlice = sqliteTable(
+  "usage_slice",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull().references(() => authUser.id, { onDelete: "cascade" }),
+    installationId: text("installation_id").notNull().references(() => cliInstallation.id, { onDelete: "cascade" }),
+    subscriptionId: text("subscription_id").notNull().references(() => userSubscription.id, { onDelete: "cascade" }),
+    clientEventId: text("client_event_id").notNull(),
+    tool: text("tool").notNull(),
+    providerName: text("provider_name").notNull(),
+    sessionHash: text("session_hash"),
+    requestHash: text("request_hash"),
+    requestedModel: text("requested_model"),
+    reportedModel: text("reported_model").notNull(),
+    modelFamily: text("model_family"),
+    modelVersion: text("model_version"),
+    reasoningEffort: text("reasoning_effort"),
+    modelVariant: text("model_variant"),
+    serviceTier: text("service_tier"),
+    querySource: text("query_source", { enum: ["main", "subagent", "auxiliary", "background", "unknown"] }).notNull().default("unknown"),
+    granularity: text("granularity", { enum: ["request", "message", "turn", "session_model"] }).notNull(),
+    attributionQuality: text("attribution_quality", { enum: ["exact", "inferred", "estimated", "unknown"] }).notNull(),
+    tokenAttributionQuality: text("token_attribution_quality", { enum: ["exact", "inferred", "estimated", "unknown"] }).notNull(),
+    modelAttributionQuality: text("model_attribution_quality", { enum: ["exact", "inferred", "estimated", "unknown"] }).notNull(),
+    effortAttributionQuality: text("effort_attribution_quality", { enum: ["exact", "inferred", "estimated", "unknown"] }).notNull(),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    reasoningTokens: integer("reasoning_tokens").notNull().default(0),
+    reportedTotalTokens: integer("reported_total_tokens"),
+    observedAt: integer("observed_at").notNull(),
+    collectorVersion: text("collector_version").notNull(),
+    ingestedAt: integer("ingested_at").notNull()
+  },
+  (table) => [
+    uniqueIndex("usage_slice_installation_event_unique").on(table.installationId, table.clientEventId),
+    uniqueIndex("usage_slice_installation_request_unique").on(table.installationId, table.requestHash),
+    index("usage_slice_subscription_observed_idx").on(table.subscriptionId, table.observedAt),
+    index("usage_slice_plan_dimensions_idx").on(table.providerName, table.reportedModel, table.reasoningEffort, table.observedAt),
+    index("usage_slice_user_observed_idx").on(table.userId, table.observedAt),
+    check("usage_slice_token_nonnegative", sql`${table.inputTokens} >= 0 and ${table.cacheReadTokens} >= 0 and ${table.cacheWriteTokens} >= 0 and ${table.outputTokens} >= 0 and ${table.reasoningTokens} >= 0`),
+    check("usage_slice_has_tokens", sql`${table.inputTokens} + ${table.cacheReadTokens} + ${table.cacheWriteTokens} + ${table.outputTokens} + ${table.reasoningTokens} > 0`)
+  ]
+);
+
+/** Provider-reported subscription quota state, kept separate from token facts. */
+export const quotaSnapshot = sqliteTable(
+  "quota_snapshot",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull().references(() => authUser.id, { onDelete: "cascade" }),
+    installationId: text("installation_id").notNull().references(() => cliInstallation.id, { onDelete: "cascade" }),
+    subscriptionId: text("subscription_id").notNull().references(() => userSubscription.id, { onDelete: "cascade" }),
+    clientEventId: text("client_event_id").notNull(),
+    quotaScope: text("quota_scope").notNull(),
+    windowKind: text("window_kind", { enum: ["session", "daily", "weekly", "monthly", "rolling", "unknown"] }).notNull(),
+    usedPercent: real("used_percent"),
+    remainingPercent: real("remaining_percent"),
+    resetAt: integer("reset_at"),
+    attributionQuality: text("attribution_quality", { enum: ["exact", "inferred", "estimated", "unknown"] }).notNull(),
+    observedAt: integer("observed_at").notNull(),
+    collectorVersion: text("collector_version").notNull(),
+    ingestedAt: integer("ingested_at").notNull()
+  },
+  (table) => [
+    uniqueIndex("quota_snapshot_installation_event_unique").on(table.installationId, table.clientEventId),
+    uniqueIndex("quota_snapshot_installation_observation_unique").on(table.installationId, table.subscriptionId, table.quotaScope, table.observedAt),
+    index("quota_snapshot_subscription_scope_observed_idx").on(table.subscriptionId, table.quotaScope, table.observedAt),
+    check("quota_snapshot_used_range", sql`${table.usedPercent} is null or (${table.usedPercent} >= 0 and ${table.usedPercent} <= 100)`),
+    check("quota_snapshot_remaining_range", sql`${table.remainingPercent} is null or (${table.remainingPercent} >= 0 and ${table.remainingPercent} <= 100)`)
+  ]
+);
+
+/** Time-versioned public API prices used only for an explainable equivalent-value estimate. */
+export const modelPrice = sqliteTable(
+  "model_price",
+  {
+    id: text("id").primaryKey(),
+    providerName: text("provider_name").notNull(),
+    modelKey: text("model_key").notNull(),
+    displayName: text("display_name").notNull(),
+    inputMicrosPerMillion: integer("input_micros_per_million").notNull(),
+    cacheReadMicrosPerMillion: integer("cache_read_micros_per_million").notNull(),
+    cacheWriteMicrosPerMillion: integer("cache_write_micros_per_million").notNull(),
+    outputMicrosPerMillion: integer("output_micros_per_million").notNull(),
+    reasoningMicrosPerMillion: integer("reasoning_micros_per_million").notNull(),
+    sourceUrl: text("source_url").notNull(),
+    effectiveFrom: integer("effective_from").notNull(),
+    effectiveTo: integer("effective_to"),
+    createdAt: integer("created_at").notNull()
+  },
+  (table) => [
+    uniqueIndex("model_price_provider_model_effective_unique").on(table.providerName, table.modelKey, table.effectiveFrom),
+    index("model_price_lookup_idx").on(table.providerName, table.modelKey, table.effectiveFrom, table.effectiveTo)
+  ]
+);
+
+/** Daily public-plan snapshot built only from opted-in, eligible telemetry. */
+export const subscriptionAggregate = sqliteTable(
+  "subscription_aggregate",
+  {
+    id: text("id").primaryKey(),
+    planId: text("plan_id").notNull().references(() => subscriptionPlan.id, { onDelete: "cascade" }),
+    period: text("period", { enum: ["7d", "30d", "90d"] }).notNull(),
+    periodStart: integer("period_start").notNull(),
+    periodEnd: integer("period_end").notNull(),
+    contributorCount: integer("contributor_count").notNull(),
+    subscriptionCount: integer("subscription_count").notNull(),
+    usageSliceCount: integer("usage_slice_count").notNull(),
+    exactSliceCount: integer("exact_slice_count").notNull(),
+    completeWindowCount: integer("complete_window_count").notNull(),
+    inputTokens: integer("input_tokens").notNull(),
+    cacheReadTokens: integer("cache_read_tokens").notNull(),
+    cacheWriteTokens: integer("cache_write_tokens").notNull(),
+    outputTokens: integer("output_tokens").notNull(),
+    reasoningTokens: integer("reasoning_tokens").notNull(),
+    observedTokenTotal: integer("observed_token_total").notNull(),
+    medianTokensPerSubscription: integer("median_tokens_per_subscription"),
+    apiEquivalentMicros: integer("api_equivalent_micros"),
+    allowanceValueScore: real("allowance_value_score"),
+    satisfactionScore: real("satisfaction_score"),
+    satisfactionCount: integer("satisfaction_count").notNull().default(0),
+    qualityAdjustedValueScore: real("quality_adjusted_value_score"),
+    confidence: real("confidence").notNull(),
+    changePercent: real("change_percent"),
+    methodologyVersion: text("methodology_version").notNull(),
+    snapshotDay: integer("snapshot_day").notNull(),
+    calculatedAt: integer("calculated_at").notNull()
+  },
+  (table) => [
+    uniqueIndex("subscription_aggregate_plan_period_day_unique").on(table.planId, table.period, table.snapshotDay),
+    index("subscription_aggregate_period_calculated_idx").on(table.period, table.calculatedAt, table.planId)
+  ]
+);
+
+export const subscriptionDimensionAggregate = sqliteTable(
+  "subscription_dimension_aggregate",
+  {
+    id: text("id").primaryKey(),
+    planId: text("plan_id").notNull().references(() => subscriptionPlan.id, { onDelete: "cascade" }),
+    period: text("period", { enum: ["7d", "30d", "90d"] }).notNull(),
+    reportedModel: text("reported_model").notNull(),
+    reasoningEffort: text("reasoning_effort").notNull(),
+    querySource: text("query_source").notNull(),
+    contributorCount: integer("contributor_count").notNull(),
+    usageSliceCount: integer("usage_slice_count").notNull(),
+    exactSliceCount: integer("exact_slice_count").notNull(),
+    observedTokenTotal: integer("observed_token_total").notNull(),
+    apiEquivalentMicros: integer("api_equivalent_micros"),
+    snapshotDay: integer("snapshot_day").notNull(),
+    calculatedAt: integer("calculated_at").notNull()
+  },
+  (table) => [
+    uniqueIndex("subscription_dimension_plan_period_key_day_unique").on(table.planId, table.period, table.reportedModel, table.reasoningEffort, table.querySource, table.snapshotDay),
+    index("subscription_dimension_period_day_idx").on(table.period, table.snapshotDay, table.planId)
   ]
 );
 
@@ -410,6 +631,13 @@ export const schema = {
   cliTurnstileChallenge,
   modelAlias,
   feedbackContext,
+  subscriptionPlan,
+  userSubscription,
+  usageSlice,
+  quotaSnapshot,
+  modelPrice,
+  subscriptionAggregate,
+  subscriptionDimensionAggregate,
   aggregate,
   settings,
   auditLog,

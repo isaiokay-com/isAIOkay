@@ -41,6 +41,7 @@ export const allowanceCommandSchema = z.object({
   deviceHash: z.string().max(128).nullable(),
   cliContext: z.object({
     installationId: z.uuid(),
+    subscriptionId: z.uuid().nullable().default(null),
     sessionHash: z.string().regex(/^(?:[a-f0-9]{64}|[A-Za-z0-9_-]{43})$/i),
     tool: z.string().min(1).max(40),
     rawModelLabel: z.string().max(160).nullable(),

@@ -2,16 +2,18 @@ import type { Writable } from "node:stream";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { doctorAdapter, installAdapter, uninstallAdapter } from "./adapters.js";
-import { ApiError, approveDeviceLogin, getAllowance, getCliTurnstileChallenge, getTrackedItems, isUuid, normalizeSameOriginWebUrl, pollDeviceLogin, revokeCredential, startDeviceLogin, submitFeedback } from "./api.js";
+import { ApiError, approveDeviceLogin, deleteRemoteTelemetry, getAllowance, getCliTurnstileChallenge, getCloudUsage, getSubscriptionPlans, getTrackedItems, isUuid, normalizeSameOriginWebUrl, pollDeviceLogin, revokeCredential, startDeviceLogin, submitFeedback, uploadTelemetry, upsertSubscription } from "./api.js";
 import { normalizeProviderEvent } from "./normalizers.js";
+import { normalizeProviderQuota, normalizeProviderUsage } from "./usage-normalizers.js";
 import { decidePrompt, pendingSessionCount, recordedSessionCount, reminderStatus, selectRateableSession, type ReminderStatus } from "./prompt-policy.js";
 import { createEventId, MAX_INPUT_BYTES, safeEventSummary, sessionHash as hashSession } from "./privacy.js";
 import { LocalStore, resolveStoragePaths } from "./storage.js";
 import { defaultHarnessCommand, detectShell, getShellIntegrationStatus, installShellIntegration, isSafeShellPath, renderShellIntegration, SHELL_CONTEXT_ENV, shellIntegrationActive, shellIntegrationInstalled, shellIntegrationPath, shellReloadCommand, SUPPORTED_SHELLS, uninstallShellIntegration, type SupportedShell } from "./shell-integration.js";
 import { summarizeSession } from "./session-summary.js";
 import type { TerminalChoice, TerminalFormField } from "./terminal.js";
-import { PROVIDERS, type ApiTrackedItem, type CliCredential, type Provider, type StoredEvent } from "./types.js";
+import { PROVIDERS, type ApiTrackedItem, type CliCredential, type LocalSubscription, type Provider, type StoredEvent } from "./types.js";
 import { detectOneShotRunner, type OneShotRunner } from "./executable.js";
+import { collectLocalTelemetry } from "./collectors.js";
 
 const HOOK_INPUT_TIMEOUT_MS = 1_500;
 
@@ -66,7 +68,7 @@ const shellHashFor = (hmacSecret: string, io: CliIo, parentFallback: boolean): s
   ?? (parentFallback ? shellContextHash(hmacSecret, io.parentProcessId ?? process.ppid) : null);
 
 const BOOLEAN_FLAGS = new Set([
-  "all", "headless", "help", "json", "local", "no-color", "no-input", "no-open", "no-setup", "quiet", "silent", "verbose"
+  "all", "headless", "help", "json", "local", "no-color", "no-input", "no-open", "no-setup", "quiet", "share", "silent", "subscriptions", "verbose", "yes"
 ]);
 
 const parseArgs = (argv: string[]): ParsedArgs => {
@@ -215,6 +217,12 @@ const help = (): Record<string, unknown> => ({
     "isaiokay logout [--local]",
     "isaiokay allowance",
     "isaiokay status",
+    "isaiokay subscription [list|add|bind|consent|end]",
+    "isaiokay usage",
+    "isaiokay collect",
+    "isaiokay sync",
+    "isaiokay export",
+    "isaiokay telemetry delete --yes",
     "isaiokay pending [list|clear]",
     "isaiokay prompt",
     "isaiokay rate [submit|show|defer <seconds>|clear]"
@@ -236,6 +244,12 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   logout: ["local"],
   allowance: [],
   status: [],
+  subscription: ["provider", "provider-name", "plan", "plan-slug", "price", "currency", "billing", "binding", "id", "share"],
+  usage: ["cloud", "period"],
+  collect: [],
+  sync: [],
+  export: [],
+  telemetry: ["local", "subscriptions", "yes"],
   pending: [],
   prompt: [],
   rate: ["result-quality", "usage-efficiency", "item", "provider", "tags", "comment", "event-id", "no-open"]
@@ -277,6 +291,12 @@ const COMMAND_HELP: Record<string, { summary: string; usage: string[]; notes?: s
   login: { summary: "Sign in with a short-lived browser code.", usage: ["isaiokay login", "isaiokay login --headless", "isaiokay login --no-setup", "isaiokay login --json"] },
   rate: { summary: "Rate an AI coding session, with same-shell suggestions when available.", usage: ["isaiokay rate", "isaiokay rate submit --provider <name> --item <slug> --result-quality 4 --usage-efficiency 3", "isaiokay rate show", "isaiokay rate defer <seconds>"], notes: ["Interactive ratings use vertical keyboard selectors and require no typing. Use ↑/↓ to choose, Enter to continue, or 1–5 to jump to a rating; Esc skips today without submitting."] },
   status: { summary: "Show authentication, integrations, shell activation, and check-in readiness.", usage: ["isaiokay status", "isaiokay status --json"] },
+  subscription: { summary: "Configure multiple coding subscriptions and choose which harness/provider uses each one.", usage: ["isaiokay subscription list", "isaiokay subscription add --provider claude --plan 'Claude Max 5x' --plan-slug claude-max-5x --price 100 --share", "isaiokay subscription bind opencode:anthropic <subscription-id>", "isaiokay subscription consent <subscription-id> off"] },
+  usage: { summary: "Show observed tokens split by subscription, model, and reasoning effort.", usage: ["isaiokay usage", "isaiokay usage --cloud --period 30d", "isaiokay usage --cloud --period all --json"] },
+  collect: { summary: "Scan provider-owned local metadata and retain only prompt-free token counters.", usage: ["isaiokay collect", "isaiokay collect --json"] },
+  export: { summary: "Export local subscriptions and prompt-free telemetry as JSON.", usage: ["isaiokay export > isaiokay-export.json"] },
+  telemetry: { summary: "Manage collected telemetry.", usage: ["isaiokay telemetry delete --yes", "isaiokay telemetry delete --local --yes", "isaiokay telemetry delete --subscriptions --yes"] },
+  sync: { summary: "Upload pending prompt-free telemetry for opted-in community aggregation.", usage: ["isaiokay sync", "isaiokay sync --json"] },
   doctor: { summary: "Check provider integrations and shell activation.", usage: ["isaiokay doctor", "isaiokay doctor codex"] },
   install: { summary: "Install one provider or every detected automatic integration.", usage: ["isaiokay install --all", "isaiokay install codex"] },
   uninstall: {
@@ -335,6 +355,12 @@ const writeHelp = (parsed: ParsedArgs, io: CliIo, command?: string): void => {
     io.stdout.write("    run <provider>      Run a harness and ask afterward\n");
     io.stdout.write("    shell install       Keep using normal harness commands\n");
     io.stdout.write("    status             Show CLI status\n");
+    io.stdout.write("    subscription       Configure paid coding plans\n");
+    io.stdout.write("    usage              Show token usage by model and effort\n");
+    io.stdout.write("    collect            Collect provider token metadata locally\n");
+    io.stdout.write("    sync               Upload pending telemetry\n");
+    io.stdout.write("    export             Export local telemetry as JSON\n");
+    io.stdout.write("    telemetry          Delete collected telemetry\n");
     io.stdout.write("    rate               Rate a recent session\n");
     io.stdout.write("    doctor             Check integrations\n\n");
     io.stdout.write(`  Run ${style.cyan("isaiokay help <command>")} for details.\n`);
@@ -524,9 +550,20 @@ const runHook = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promis
   }
   try {
     const config = await store.getConfig();
-    const normalized = normalizeProviderEvent(provider, payload, config.hmacSecret, io.now?.() ?? Date.now());
+    const now = io.now?.() ?? Date.now();
+    const payloadRecord = typeof payload === "object" && payload !== null && !Array.isArray(payload) ? payload as Record<string, unknown> : {};
+    const providerId = typeof payloadRecord.providerID === "string" ? payloadRecord.providerID.toLowerCase() : null;
+    const subscriptionId = providerId ? config.subscriptionBindings[`${provider}:${providerId}`] ?? config.subscriptionBindings[provider] : config.subscriptionBindings[provider];
+    const usage = subscriptionId ? normalizeProviderUsage(provider, payload, subscriptionId, config.hmacSecret, now) : [];
+    const quota = subscriptionId ? normalizeProviderQuota(provider, payload, subscriptionId, now) : [];
+    if (usage.length > 0 || quota.length > 0) await store.recordTelemetry({ usage, quota });
+    const normalized = normalizeProviderEvent(provider, payload, config.hmacSecret, now);
     if (!normalized.accepted) {
-      result(safeEventSummary(provider, false, normalized.reason));
+      if (usage.length > 0 || quota.length > 0) {
+        result({ accepted: true, provider, usageSlices: usage.length, quotaSnapshots: quota.length, notificationSafe: false });
+      } else {
+        result({ ...safeEventSummary(provider, false, normalized.reason), ...(subscriptionId ? {} : { telemetry: "subscription_not_configured" }) });
+      }
       return 0;
     }
     const wrapperHash = foregroundSessionHash(io, provider, config.hmacSecret);
@@ -544,6 +581,8 @@ const runHook = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promis
         attribution: event.attribution,
         model: event.model,
         occurredAt: event.occurredAt,
+        usageSlices: usage.length,
+        quotaSnapshots: quota.length,
         notificationSafe: false,
         promptDeferredToForeground: wrapperHash !== null
       });
@@ -556,6 +595,8 @@ const runHook = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promis
       attribution: event.attribution,
       model: event.model,
       occurredAt: event.occurredAt,
+      usageSlices: usage.length,
+      quotaSnapshots: quota.length,
       prompt
     }, prompt.eligible
       ? `You've had some real time with ${providerLabel(provider)} today. Want to capture how it felt? Run \`isaiokay rate\` for a 30-second check-in. I won't ask again today.`
@@ -565,6 +606,31 @@ const runHook = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promis
     result(safeEventSummary(provider, false, "local_state_unavailable"));
   }
   return 0;
+};
+
+const collectAndSyncQuietly = async (store: LocalStore, io: CliIo): Promise<void> => {
+  try {
+    const now = io.now?.() ?? Date.now();
+    const config = await store.getConfig();
+    const collected = await collectLocalTelemetry(config, io.home ?? homedir(), now);
+    if (collected.usage.length > 0 || collected.quota.length > 0) await store.recordTelemetry(collected);
+    const credential = await store.getCredential();
+    if (!credential || credential.expiresAt <= now) return;
+    for (const subscription of config.subscriptions) await upsertSubscription(fetcherFor(io), credential, subscription);
+    const state = await store.getState();
+    const usage = state.usage.filter(({ id }) => state.pendingUsageIds.includes(id));
+    const quota = state.quota.filter(({ id }) => state.pendingQuotaIds.includes(id));
+    for (let usageIndex = 0, quotaIndex = 0; usageIndex < usage.length || quotaIndex < quota.length;) {
+      const usageBatch = usage.slice(usageIndex, usageIndex + 100);
+      const quotaBatch = quota.slice(quotaIndex, quotaIndex + Math.max(0, 100 - usageBatch.length));
+      await uploadTelemetry(fetcherFor(io), credential, usageBatch, quotaBatch);
+      await store.completeTelemetry(usageBatch.map(({ id }) => id), quotaBatch.map(({ id }) => id));
+      usageIndex += usageBatch.length;
+      quotaIndex += quotaBatch.length;
+    }
+  } catch {
+    // Collection and upload are best-effort and never alter the harness result.
+  }
 };
 
 const runHarness = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<number> => {
@@ -639,6 +705,7 @@ const runHarness = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Pro
         wrapperEvent(provider, sessionHash, shellHash, startedAt, createId()),
         wrapperEvent(provider, sessionHash, shellHash, endedAt, createId())
       ]);
+      await collectAndSyncQuietly(store, io);
       // Prompt after any completed harness exit, including Ctrl-C, Ctrl+Break,
       // non-zero statuses, and crashes. Only a shutdown signal received by this
       // wrapper means the foreground terminal itself may no longer be usable.
@@ -785,6 +852,330 @@ const runConfig = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Prom
   return 0;
 };
 
+const DEFAULT_PROVIDER_NAMES: Record<Provider, string> = {
+  codex: "OpenAI", claude: "Anthropic", cursor: "Cursor", opencode: "OpenCode",
+  gemini: "Google", copilot: "GitHub", cline: "Cline", windsurf: "Cognition",
+  aider: "Aider", amp: "Sourcegraph", grok: "xAI", qwen: "Alibaba",
+  kimi: "Kimi", muse: "Muse"
+};
+
+const parsePriceMicros = (value: string | undefined): number | null | undefined => {
+  if (value === undefined) return null;
+  if (!/^(?:0|[1-9][0-9]{0,8})(?:\.[0-9]{1,6})?$/.test(value)) return undefined;
+  const micros = Math.round(Number(value) * 1_000_000);
+  return Number.isSafeInteger(micros) ? micros : undefined;
+};
+
+const runSubscription = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<number> => {
+  const operation = parsed.positionals[0] ?? "list";
+  const config = await store.getConfig();
+  if (operation === "list") {
+    const body = { subscriptions: config.subscriptions, bindings: config.subscriptionBindings };
+    writeResult(parsed, io, body, (style) => {
+      io.stdout.write(`\n  ${style.bold(style.cyan("Coding subscriptions"))}\n`);
+      if (config.subscriptions.length === 0) {
+        io.stdout.write(`  ${style.dim("None configured. Run `isaiokay subscription add --provider claude --plan \"Claude Max\"`.")}\n\n`);
+        return;
+      }
+      for (const subscription of config.subscriptions) {
+        const bindings = Object.entries(config.subscriptionBindings).filter(([, id]) => id === subscription.id).map(([key]) => key);
+        const price = subscription.priceMicros === null ? "price unknown" : `${subscription.currency} ${(subscription.priceMicros / 1_000_000).toFixed(2)}/${subscription.billingPeriod}`;
+        io.stdout.write(`  ${style.bold(subscription.planLabel)} · ${subscription.providerName}\n`);
+        io.stdout.write(`    ${subscription.id} · ${price} · community ${subscription.aggregateConsent ? "on" : "off"}\n`);
+        io.stdout.write(`    bound to ${bindings.length > 0 ? bindings.join(", ") : "nothing"}\n`);
+      }
+      io.stdout.write("\n");
+    });
+    return 0;
+  }
+
+  if (operation === "bind") {
+    const bindingKey = parsed.positionals[1] ?? flagText(parsed.flags, "binding");
+    const subscriptionId = parsed.positionals[2] ?? flagText(parsed.flags, "id");
+    if (!bindingKey || !subscriptionId) {
+      writeCommandError(parsed, io, "subscription_binding_required", "Provide a harness binding and subscription ID.");
+      return 1;
+    }
+    try {
+      await store.bindSubscription(bindingKey.toLowerCase(), subscriptionId);
+      writeResult(parsed, io, { bound: true, bindingKey, subscriptionId }, (style) => io.stdout.write(`\n  ${style.green("✓")} ${bindingKey} now records against ${subscriptionId}.\n\n`));
+      return 0;
+    } catch (error) {
+      writeCommandError(parsed, io, "subscription_bind_failed", error instanceof Error ? error.message : undefined);
+      return 1;
+    }
+  }
+
+  if (operation === "add") {
+    const provider = parseProvider(flagText(parsed.flags, "provider") ?? parsed.positionals[1]);
+    const planLabel = flagText(parsed.flags, "plan")?.trim();
+    let priceMicros = parsePriceMicros(flagText(parsed.flags, "price"));
+    let billing = flagText(parsed.flags, "billing") ?? "monthly";
+    let currency = (flagText(parsed.flags, "currency") ?? "USD").toUpperCase();
+    if (!provider || !planLabel || priceMicros === undefined || !["monthly", "annual", "weekly", "other"].includes(billing) || !/^[A-Z]{3}$/.test(currency)) {
+      writeCommandError(parsed, io, "invalid_subscription", "Provide a supported --provider and --plan; price, billing, and currency must be valid when supplied.");
+      return 1;
+    }
+    const now = io.now?.() ?? Date.now();
+    const providerName = flagText(parsed.flags, "provider-name")?.trim() || DEFAULT_PROVIDER_NAMES[provider];
+    const credential = await store.getCredential();
+    let planSlug = flagText(parsed.flags, "plan-slug");
+    if (!planSlug && credential && credential.expiresAt > now) {
+      const plans = await getSubscriptionPlans(fetcherFor(io), credential);
+      const matched = plans.find((plan) => plan.name.toLowerCase() === planLabel.toLowerCase() && plan.providerName.toLowerCase() === providerName.toLowerCase());
+      if (matched) {
+        planSlug = matched.slug;
+        if (flagText(parsed.flags, "price") === undefined) priceMicros = matched.priceMicros;
+        if (flagText(parsed.flags, "billing") === undefined) billing = matched.billingPeriod;
+        if (flagText(parsed.flags, "currency") === undefined) currency = matched.currency;
+      }
+    }
+    const subscription: LocalSubscription = {
+      id: io.createId?.() ?? createEventId(),
+      provider,
+      providerName,
+      planLabel,
+      ...(planSlug ? { planSlug } : {}),
+      billingPeriod: billing as LocalSubscription["billingPeriod"],
+      priceMicros,
+      currency,
+      aggregateConsent: parsed.flags.has("share"),
+      startedAt: now,
+      endedAt: null,
+      createdAt: now,
+      updatedAt: now
+    };
+    try {
+      if (credential && credential.expiresAt > now) await upsertSubscription(fetcherFor(io), credential, subscription);
+      await store.upsertSubscription(subscription);
+      const bindingKey = (flagText(parsed.flags, "binding") ?? provider).toLowerCase();
+      await store.bindSubscription(bindingKey, subscription.id);
+      writeResult(parsed, io, { subscription, bindingKey, synced: Boolean(credential) }, (style) => {
+        io.stdout.write(`\n  ${style.green("✓")} ${style.bold(`${planLabel} configured.`)}\n`);
+        io.stdout.write(`  Bound to ${style.cyan(bindingKey)} · community aggregation ${subscription.aggregateConsent ? "enabled" : "disabled"}\n\n`);
+      });
+      return 0;
+    } catch (error) {
+      writeCommandError(parsed, io, error instanceof ApiError ? error.code : "subscription_save_failed", error instanceof Error ? error.message : undefined);
+      return 1;
+    }
+  }
+
+  if (operation === "consent") {
+    const subscriptionId = parsed.positionals[1] ?? flagText(parsed.flags, "id");
+    const consent = parsed.positionals[2]?.toLowerCase();
+    const existing = config.subscriptions.find(({ id }) => id === subscriptionId);
+    if (!existing || (consent !== "on" && consent !== "off")) {
+      writeCommandError(parsed, io, "subscription_consent_required", "Provide a subscription ID followed by on or off.");
+      return 1;
+    }
+    const updated = { ...existing, aggregateConsent: consent === "on", updatedAt: io.now?.() ?? Date.now() };
+    const credential = await store.getCredential();
+    try {
+      if (credential && credential.expiresAt > updated.updatedAt) await upsertSubscription(fetcherFor(io), credential, updated);
+      await store.upsertSubscription(updated);
+      writeResult(parsed, io, { subscriptionId, aggregateConsent: updated.aggregateConsent }, (style) => {
+        io.stdout.write(`\n  ${style.green("✓")} Community aggregation ${updated.aggregateConsent ? "enabled" : "disabled"}; private usage history is unchanged.\n\n`);
+      });
+      return 0;
+    } catch (error) {
+      writeCommandError(parsed, io, error instanceof ApiError ? error.code : "subscription_consent_failed", error instanceof Error ? error.message : undefined);
+      return 1;
+    }
+  }
+
+  if (operation === "end") {
+    const subscriptionId = parsed.positionals[1] ?? flagText(parsed.flags, "id");
+    const existing = config.subscriptions.find(({ id }) => id === subscriptionId);
+    if (!existing) {
+      writeCommandError(parsed, io, "subscription_not_found");
+      return 1;
+    }
+    const now = io.now?.() ?? Date.now();
+    const ended = { ...existing, endedAt: now, updatedAt: now };
+    const credential = await store.getCredential();
+    try {
+      if (credential && credential.expiresAt > now) await upsertSubscription(fetcherFor(io), credential, ended);
+      await store.upsertSubscription(ended);
+      writeResult(parsed, io, { ended: true, subscriptionId }, (style) => io.stdout.write(`\n  ${style.green("✓")} Subscription ended; historical usage was retained.\n\n`));
+      return 0;
+    } catch (error) {
+      writeCommandError(parsed, io, error instanceof ApiError ? error.code : "subscription_save_failed", error instanceof Error ? error.message : undefined);
+      return 1;
+    }
+  }
+
+  writeCommandError(parsed, io, "invalid_subscription_operation");
+  return 1;
+};
+
+const runUsage = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<number> => {
+  if (parsed.flags.has("cloud")) {
+    const periodText = flagText(parsed.flags, "period") ?? "30d";
+    if (periodText !== "7d" && periodText !== "30d" && periodText !== "90d" && periodText !== "all") {
+      writeCommandError(parsed, io, "invalid_usage_period", "Use 7d, 30d, 90d, or all.");
+      return 1;
+    }
+    const credential = await requireCredential(parsed, store, io);
+    if (!credential) return 1;
+    try {
+      const rows = await getCloudUsage(fetcherFor(io), credential, periodText);
+      writeResult(parsed, io, { period: periodText, rows }, (style) => {
+        io.stdout.write(`\n  ${style.bold(style.cyan(`Cloud coding usage · ${periodText}`))}\n`);
+        if (rows.length === 0) io.stdout.write(`  ${style.dim("No synced token observations in this period.")}\n`);
+        for (const row of rows) {
+          io.stdout.write(`  ${style.bold(row.planLabel)} · ${row.reportedModel} · ${row.reasoningEffort} · ${row.querySource}\n`);
+          io.stdout.write(`    ${row.observedTokens.toLocaleString("en-US")} tokens · ${row.usageSliceCount} slices\n`);
+        }
+        io.stdout.write("\n");
+      });
+      return 0;
+    } catch (error) {
+      writeCommandError(parsed, io, error instanceof ApiError ? error.code : "usage_summary_failed", error instanceof Error ? error.message : undefined);
+      return 1;
+    }
+  }
+  const config = await store.getConfig();
+  const collected = await collectLocalTelemetry(config, io.home ?? homedir(), io.now?.() ?? Date.now());
+  if (collected.usage.length > 0 || collected.quota.length > 0) await store.recordTelemetry(collected);
+  const state = await store.getState();
+  const subscriptions = new Map(config.subscriptions.map((subscription) => [subscription.id, subscription]));
+  const groups = new Map<string, { subscriptionId: string; plan: string; model: string; effort: string; input: number; cacheRead: number; cacheWrite: number; output: number; reasoning: number; total: number; slices: number }>();
+  for (const usage of state.usage) {
+    const subscription = subscriptions.get(usage.subscriptionId);
+    const key = `${usage.subscriptionId}\u0000${usage.reportedModel}\u0000${usage.reasoningEffort ?? "default/unknown"}`;
+    const group = groups.get(key) ?? { subscriptionId: usage.subscriptionId, plan: subscription?.planLabel ?? "Unknown subscription", model: usage.reportedModel, effort: usage.reasoningEffort ?? "default/unknown", input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0, total: 0, slices: 0 };
+    group.input += usage.inputTokens;
+    group.cacheRead += usage.cacheReadTokens;
+    group.cacheWrite += usage.cacheWriteTokens;
+    group.output += usage.outputTokens;
+    group.reasoning += usage.reasoningTokens;
+    // Reasoning is an informational subset of output for the providers we
+    // currently collect, so it is never added to the total a second time.
+    group.total += usage.reportedTotalTokens ?? usage.inputTokens + usage.outputTokens +
+      (usage.tool === "claude-code" ? usage.cacheReadTokens + usage.cacheWriteTokens : 0);
+    group.slices += 1;
+    groups.set(key, group);
+  }
+  const rows = [...groups.values()].sort((left, right) => right.total - left.total);
+  const body = { rows, pendingUsage: state.pendingUsageIds.length, pendingQuota: state.pendingQuotaIds.length };
+  writeResult(parsed, io, body, (style) => {
+    io.stdout.write(`\n  ${style.bold(style.cyan("Observed coding usage"))}\n`);
+    if (rows.length === 0) io.stdout.write(`  ${style.dim("No token-bearing provider events have been observed yet.")}\n`);
+    for (const row of rows) {
+      io.stdout.write(`  ${style.bold(row.plan)} · ${row.model} · ${row.effort}\n`);
+      io.stdout.write(`    ${row.total.toLocaleString()} tokens · ${row.slices} slice${row.slices === 1 ? "" : "s"}\n`);
+    }
+    io.stdout.write(`  ${style.dim(`${body.pendingUsage + body.pendingQuota} observations waiting to sync`)}\n\n`);
+  });
+  return 0;
+};
+
+const runCollect = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<number> => {
+  try {
+    const config = await store.getConfig();
+    const collected = await collectLocalTelemetry(config, io.home ?? homedir(), io.now?.() ?? Date.now());
+    if (collected.usage.length > 0 || collected.quota.length > 0) await store.recordTelemetry(collected);
+    const body = { usageSlices: collected.usage.length, quotaSnapshots: collected.quota.length, providers: collected.diagnostics };
+    writeResult(parsed, io, body, (style) => {
+      io.stdout.write(`\n  ${style.green("✓")} ${style.bold("Provider metadata scanned.")}\n`);
+      for (const provider of collected.diagnostics) {
+        io.stdout.write(`  ${provider.provider.padEnd(9)} ${provider.configured ? `${provider.usage} usage · ${provider.quota} quota` : "no subscription binding"}\n`);
+      }
+      io.stdout.write(`  ${style.dim("Only token/model/effort/quota metadata was retained; prompts and code were discarded.")}\n\n`);
+    });
+    return 0;
+  } catch (error) {
+    writeCommandError(parsed, io, "telemetry_collection_failed", error instanceof Error ? error.message : undefined);
+    return 1;
+  }
+};
+
+const runExport = async (_parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<number> => {
+  try {
+    const config = await store.getConfig();
+    const collected = await collectLocalTelemetry(config, io.home ?? homedir(), io.now?.() ?? Date.now());
+    if (collected.usage.length > 0 || collected.quota.length > 0) await store.recordTelemetry(collected);
+    const state = await store.getState();
+    writeJson(io, {
+      schemaVersion: 1,
+      exportedAt: new Date(io.now?.() ?? Date.now()).toISOString(),
+      subscriptions: config.subscriptions,
+      subscriptionBindings: config.subscriptionBindings,
+      usage: state.usage,
+      quota: state.quota
+    });
+    return 0;
+  } catch (error) {
+    writeError(io, error instanceof Error ? "telemetry_export_failed" : "local_state_unavailable");
+    return 1;
+  }
+};
+
+const runTelemetry = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<number> => {
+  const operation = parsed.positionals[0];
+  if (operation !== "delete") {
+    writeCommandError(parsed, io, "invalid_telemetry_operation");
+    return 1;
+  }
+  if (!parsed.flags.has("yes")) {
+    writeCommandError(parsed, io, "telemetry_deletion_confirmation_required", "This permanently deletes collected telemetry. Re-run with --yes.");
+    return 1;
+  }
+  const includeSubscriptions = parsed.flags.has("subscriptions");
+  const localOnly = parsed.flags.has("local");
+  let remote = { usageDeleted: 0, quotaDeleted: 0, subscriptionsDeleted: 0 };
+  try {
+    if (!localOnly) {
+      const credential = await requireCredential(parsed, store, io);
+      if (!credential) return 1;
+      remote = await deleteRemoteTelemetry(fetcherFor(io), credential, includeSubscriptions);
+    }
+    await store.clearTelemetry(includeSubscriptions);
+    const body = { deleted: true, local: true, remote: !localOnly, includeSubscriptions, ...remote };
+    writeResult(parsed, io, body, (style) => {
+      io.stdout.write(`\n  ${style.green("✓")} ${style.bold("Collected telemetry deleted.")}\n`);
+      io.stdout.write(`  ${remote.usageDeleted} cloud usage slices · ${remote.quotaDeleted} cloud quota snapshots${includeSubscriptions ? ` · ${remote.subscriptionsDeleted} subscriptions` : ""}\n\n`);
+    });
+    return 0;
+  } catch (error) {
+    writeCommandError(parsed, io, error instanceof ApiError ? error.code : "telemetry_delete_failed", error instanceof Error ? error.message : undefined);
+    return 1;
+  }
+};
+
+const runSync = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<number> => {
+  const credential = await requireCredential(parsed, store, io);
+  if (!credential) return 1;
+  const config = await store.getConfig();
+  try {
+    const collected = await collectLocalTelemetry(config, io.home ?? homedir(), io.now?.() ?? Date.now());
+    if (collected.usage.length > 0 || collected.quota.length > 0) await store.recordTelemetry(collected);
+    const state = await store.getState();
+    for (const subscription of config.subscriptions) await upsertSubscription(fetcherFor(io), credential, subscription);
+    const pendingUsage = new Map(state.usage.filter(({ id }) => state.pendingUsageIds.includes(id)).map((entry) => [entry.id, entry]));
+    const pendingQuota = new Map(state.quota.filter(({ id }) => state.pendingQuotaIds.includes(id)).map((entry) => [entry.id, entry]));
+    let accepted = 0;
+    let duplicates = 0;
+    while (pendingUsage.size > 0 || pendingQuota.size > 0) {
+      const usage = [...pendingUsage.values()].slice(0, 100);
+      const quota = [...pendingQuota.values()].slice(0, Math.max(0, 100 - usage.length));
+      const outcome = await uploadTelemetry(fetcherFor(io), credential, usage, quota);
+      accepted += outcome.accepted;
+      duplicates += outcome.duplicates;
+      await store.completeTelemetry(usage.map(({ id }) => id), quota.map(({ id }) => id));
+      for (const { id } of usage) pendingUsage.delete(id);
+      for (const { id } of quota) pendingQuota.delete(id);
+    }
+    const body = { synced: true, accepted, duplicates, subscriptions: config.subscriptions.length };
+    writeResult(parsed, io, body, (style) => io.stdout.write(`\n  ${style.green("✓")} ${accepted} telemetry observations synced${duplicates ? ` · ${duplicates} already present` : ""}.\n\n`));
+    return 0;
+  } catch (error) {
+    writeCommandError(parsed, io, error instanceof ApiError ? error.code : "telemetry_sync_failed", error instanceof Error ? error.message : undefined);
+    return 1;
+  }
+};
+
 const runStatus = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<number> => {
   const now = io.now?.() ?? Date.now();
   const env = io.env ?? process.env;
@@ -815,6 +1206,9 @@ const runStatus = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Prom
     adapters: Object.keys(config.adapters).sort(),
     eventCount: state.events.length,
     pendingCount: state.pendingEventIds.length,
+    subscriptionCount: config.subscriptions.filter(({ endedAt }) => endedAt === null).length,
+    usageSliceCount: state.usage.length,
+    pendingTelemetryCount: state.pendingUsageIds.length + state.pendingQuotaIds.length,
     sessionCount: recordedSessionCount(state),
     pendingSessionCount: pendingSessionCount(state),
     nextAllowedAt: state.rate.nextAllowedAt,
@@ -829,6 +1223,8 @@ const runStatus = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Prom
     io.stdout.write(`  Integrations  ${body.adapters.length > 0 ? body.adapters.join(", ") : "None installed"}\n`);
     if (detected.length > 0) io.stdout.write(`  Detected      ${detected.map(({ label }) => label).join(", ")}\n`);
     io.stdout.write(`  Sessions      ${body.sessionCount} recorded · ${body.pendingSessionCount} pending\n`);
+    io.stdout.write(`  Subscriptions ${body.subscriptionCount} active\n`);
+    io.stdout.write(`  Telemetry     ${body.usageSliceCount} usage slices · ${body.pendingTelemetryCount} waiting to sync\n`);
     io.stdout.write(`  Check-in      ${reminderStatusLabel(prompt)}\n`);
     io.stdout.write(`  Experience    ${experiencedMinutes(prompt)} minutes today\n`);
     if (body.shell) {
@@ -985,6 +1381,66 @@ const offerDetectedIntegrations = async (parsed: ParsedArgs, store: LocalStore, 
   io.stdout.write(`\n  Run ${style.cyan("isaiokay doctor")} to check integration health.\n\n`);
 };
 
+export const harnessForMarketProvider = (providerName: string): Provider | null => ({
+  openai: "codex",
+  anthropic: "claude",
+  xai: "grok",
+  github: "copilot",
+  cursor: "cursor",
+  opencode: "opencode",
+  kimi: "kimi",
+  "moonshot ai": "kimi"
+})[providerName.toLowerCase()] as Provider | undefined ?? null;
+
+const offerSubscriptionSetup = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<void> => {
+  if (!loginUsesHumanOutput(parsed, io) || !io.selectMany || !io.select || parsed.flags.has("no-input") || parsed.flags.has("no-setup")) return;
+  const credential = await store.getCredential();
+  if (!credential || credential.expiresAt <= (io.now?.() ?? Date.now())) return;
+  const [plans, config] = await Promise.all([getSubscriptionPlans(fetcherFor(io), credential).catch(() => []), store.getConfig()]);
+  const existingSlugs = new Set(config.subscriptions.flatMap(({ planSlug }) => planSlug ? [planSlug] : []));
+  const available = plans.filter((plan) => !existingSlugs.has(plan.slug) && harnessForMarketProvider(plan.providerName) !== null);
+  if (available.length === 0) return;
+  const style = loginStyles(parsed, io);
+  io.stdout.write(`  ${style.bold(style.cyan("Coding subscriptions"))}\n`);
+  io.stdout.write(`  ${style.dim("Select the plans whose included coding allowance you want to measure.")}\n\n`);
+  const selected = await io.selectMany(
+    "Plans you currently pay for",
+    available.map((plan) => ({
+      value: plan.slug,
+      label: `${plan.name} · ${plan.providerName}`,
+      hint: plan.priceMicros === null ? "price pending" : `${plan.currency} ${plan.priceMicros / 1_000_000}/${plan.billingPeriod}`
+    })),
+    { color: loginUsesColor(parsed, io), maxSelections: available.length }
+  );
+  if (selected === undefined) throw new CliCancelledError();
+  if (selected.length === 0) {
+    io.stdout.write(`\n  ${style.dim("No subscriptions configured. Add one later with `isaiokay subscription add`.")}\n\n`);
+    return;
+  }
+  const share = await io.select("Contribute anonymous measurements to community rankings?", [
+    { value: "yes", label: "Share aggregates", hint: "no prompts, code, paths, or raw session IDs" },
+    { value: "no", label: "Keep private", hint: "track locally and in your private account only" }
+  ], { initialValue: "no", color: loginUsesColor(parsed, io) });
+  if (share === undefined) throw new CliCancelledError();
+  const now = io.now?.() ?? Date.now();
+  for (const slug of selected) {
+    const plan = available.find((candidate) => candidate.slug === slug);
+    if (!plan) continue;
+    const provider = harnessForMarketProvider(plan.providerName);
+    if (!provider) continue;
+    const subscription: LocalSubscription = {
+      id: createEventId(), provider, providerName: plan.providerName, planLabel: plan.name, planSlug: plan.slug,
+      billingPeriod: plan.billingPeriod, priceMicros: plan.priceMicros, currency: plan.currency,
+      aggregateConsent: share === "yes", startedAt: now, endedAt: null, createdAt: now, updatedAt: now
+    };
+    await upsertSubscription(fetcherFor(io), credential, subscription);
+    await store.upsertSubscription(subscription);
+    await store.bindSubscription(provider, subscription.id);
+    io.stdout.write(`  ${style.green("✓")} ${plan.name} → ${provider}\n`);
+  }
+  io.stdout.write(`\n  ${style.dim("Use `isaiokay subscription bind` for OpenCode or alternate provider routes.")}\n\n`);
+};
+
 const offerShellIntegration = async (parsed: ParsedArgs, store: LocalStore, io: CliIo): Promise<void> => {
   if (!loginUsesHumanOutput(parsed, io) || !io.select || parsed.flags.has("no-input") || parsed.flags.has("no-setup")) return;
   const env = io.env ?? process.env;
@@ -1024,6 +1480,7 @@ const finishInteractiveSetup = async (parsed: ParsedArgs, store: LocalStore, io:
   const style = loginStyles(parsed, io);
   try {
     await offerDetectedIntegrations(parsed, store, io);
+    await offerSubscriptionSetup(parsed, store, io);
     await offerShellIntegration(parsed, store, io);
     await store.completeOnboarding(io.now?.() ?? Date.now());
     io.stdout.write(`  ${style.green("✓")} ${style.bold("Setup complete.")}\n`);
@@ -1585,6 +2042,16 @@ const runRateSubmit = async (
     clientEventId: submissionId
   };
   if (model) payload.rawModelLabel = model;
+  const modelProvider = model?.includes("/") ? model.slice(0, model.indexOf("/")).toLowerCase() : null;
+  const subscriptionBinding = ratingProvider === "opencode" && modelProvider
+    ? config.subscriptionBindings[`opencode:${modelProvider}`] ?? config.subscriptionBindings.opencode
+    : config.subscriptionBindings[ratingProvider];
+  const subscription = config.subscriptions.find(({ id }) => id === subscriptionBinding);
+  const sessionOccurredAt = selected?.occurredAt ?? now;
+  if (subscription &&
+    (subscription.startedAt === null || sessionOccurredAt >= subscription.startedAt) &&
+    (subscription.endedAt === null || sessionOccurredAt <= subscription.endedAt)
+  ) payload.clientSubscriptionId = subscription.id;
   if (confirmedItemSlug) payload.confirmedItemSlug = confirmedItemSlug;
   if (comment) payload.shortComment = comment.slice(0, 500);
   if (humanOutput && io.form && !parsed.flags.has("no-input")) {
@@ -2014,6 +2481,12 @@ export const runCli = async (argv: string[], io: CliIo): Promise<number> => {
       case "logout": return await runLogout(parsed, store, io);
       case "allowance": return await runAllowance(parsed, store, io);
       case "status": return await runStatus(parsed, store, io);
+      case "subscription": return await runSubscription(parsed, store, io);
+      case "usage": return await runUsage(parsed, store, io);
+      case "collect": return await runCollect(parsed, store, io);
+      case "sync": return await runSync(parsed, store, io);
+      case "export": return await runExport(parsed, store, io);
+      case "telemetry": return await runTelemetry(parsed, store, io);
       case "pending": return await runPending(parsed, store, io);
       case "prompt": return await runPrompt(parsed, store, io);
       case "rate": return await runRate(parsed, store, io);

@@ -1,18 +1,22 @@
 # `@isaiokay/cli`
 
-`isaiokay` is a Node 22+ privacy-preserving event bridge and explicit rating client for IsAIokay.com.
-It accepts a deliberately small JSON envelope from supported coding tools, reduces
-it to provider/model attribution, and writes private local state atomically.
+`isaiokay` is a Node 22+ privacy-preserving coding-subscription usage collector
+for IsAIokay.com. It reads provider-owned metadata locally, reduces it to
+allowlisted token/model/effort/quota observations, and writes private state
+atomically. Optional result-quality check-ins remain a separate feature.
 
-Hooks do not send network requests or prompt for input. The explicit `install`
+Hooks do not send network requests or prompt for input. Managed foreground runs
+may sync pending telemetry after the coding process exits; `sync` and
+`telemetry delete` are explicit network operations. The explicit `install`
 command carefully merges or creates supported host configuration; `uninstall`
 removes only IsAIokay.com-owned entries. Network access is limited to foreground
-authentication and authorization, allowance checks, logout, and a rating
-submission the user explicitly confirms (including one opened after `run`).
+authentication and authorization, subscription configuration, private usage
+reads, telemetry sync/deletion, allowance checks, logout, and a rating
+submission the user explicitly confirms.
 
 ## Privacy boundary
 
-The only event fields allowed onto disk are:
+The only lifecycle and usage fields allowed onto disk are:
 
 - provider;
 - a conservative model identifier or `null`;
@@ -20,6 +24,10 @@ The only event fields allowed onto disk are:
 - event and record timestamps;
 - a random local event ID; and
 - an HMAC-SHA-256 of a supplied session/task/trajectory ID.
+- configured subscription identifiers and plan labels;
+- reported/requested model, effort or variant, tier, and main/subagent source;
+- input, cache-read, cache-write, output, and reasoning token counters; and
+- quota percentages/reset time plus separate attribution-quality labels.
 
 It never persists prompts, responses, messages, transcripts, file paths, cwd,
 repository names, raw session IDs, task IDs, or trajectory IDs. The HMAC secret
@@ -79,6 +87,12 @@ isaiokay login [--server https://isaiokay.com] [--headless|--no-open] [--no-setu
 isaiokay logout
 isaiokay allowance
 isaiokay status
+isaiokay subscription [list|add|bind|consent|end]
+isaiokay collect
+isaiokay usage [--cloud --period 7d|30d|90d|all]
+isaiokay sync
+isaiokay export
+isaiokay telemetry delete --yes
 isaiokay pending [list|clear]
 isaiokay prompt [ask|status|never]
 isaiokay rate [submit|show|defer <seconds>|clear]
@@ -95,8 +109,9 @@ The recommended first-run setup is:
 isaiokay
 ```
 
-A fresh interactive invocation signs in with X, detects supported coding CLIs,
-offers their privacy-safe integrations, and offers the transparent shell
+A fresh interactive invocation signs in with GitHub, offers the current market
+subscription catalog and separate community-aggregation consent, detects
+supported coding CLIs, offers their privacy-safe integrations, and offers the transparent shell
 wrapper. Completion is recorded locally, so later empty invocations return to
 the normal pending-rating or status behavior. Run `isaiokay setup` to repeat the
 guided setup. Redirected output, CI, and one-shot runners never trigger it
@@ -221,8 +236,8 @@ prompt slot, and an interactive reservation is rolled back when authentication
 or catalog/form setup fails before the interaction can be completed.
 
 `login` uses a short-lived browser device code. The browser retains the Better
-Auth/X session; the CLI receives only a revocable credential scoped to allowance
-reads and feedback writes. The credential is stored in a separate owner-only
+Auth/GitHub session; the CLI receives only a revocable credential scoped to
+allowance, feedback, subscriptions, and usage. The credential is stored in a separate owner-only
 file. In a terminal, login shows guided browser or headless instructions and a
 clear success message. Color is disabled when output is redirected, when
 `NO_COLOR` is set, when `TERM=dumb`, or with `--no-color`. Pass `--json` to keep
@@ -284,14 +299,14 @@ are not claims that every provider emits the same JSON shape.
 | Codex | `event: "model.active"` with `model` | Records only an explicitly active model. |
 | Claude Code | `hook_event_name: "SessionStart"` | Reads no cwd or transcript field; model remains optional. |
 | Cursor | documented `sessionStart` and `stop` hooks, or `event: "model.selected"` bridge input | `model: "Auto"` is stored as opaque (`model: null`); stop activity is recorded without auto-submitting a follow-up. |
-| OpenCode v1 plugin | `session.idle`, using a model ID cached in plugin memory from assistant metadata | The installed plugin forwards only an allowlisted envelope and uses the official TUI toast API. |
+| OpenCode v1 plugin | completed assistant messages flushed at `session.idle` | Forwards provider/model/variant/token buckets per message, preserves root/subagent source, and uses the official TUI toast API. |
 | Gemini CLI | `BeforeModel` with `llm_request.model`, then `AfterAgent` | The model event records attribution; the post-turn event can display a user-only reminder. |
 | GitHub Copilot CLI | `agentStop` plus `sessionEnd` | Records activity without forcing another agent turn; model remains `null`. |
 | Cline bridge | `TaskComplete` or `TaskCancel`, `taskId`, `provider`, `slug` | Stores the exact safe `provider/slug` model pair. |
 | Windsurf bridge | `post_cascade_response`, `trajectory_id`, `model_name` | Per-turn model attribution; trajectory ID is HMACed. |
 | Amp plugin | `agent.end` with the thread ID only | Uses Amp's native notification UI; model confirmation remains required. |
 | Aider wrapper | `event: "isaiokay.aider.model"` with `model` | Explicit wrapper/manual mode only. |
-| Grok Build hook | `SessionStart` and `Stop` with `reason: "end_turn"` | Records lifecycle activity; ignores shutdown-only Stop events and never returns a blocking decision. |
+| Grok Build hook + scanner | lifecycle events plus per-prompt `updates.jsonl` model usage | Preserves every exact model counter; effort is exact only when local metadata is unambiguous. |
 | Qwen Code hook | `SessionStart`, `Stop`, and `SessionEnd` | Records the documented start model and lifecycle completion; confirmation remains required. |
 | Kimi Code hook | `SessionStart`, `Stop`, and `SessionEnd` | Records the documented start model with no hook output; confirmation remains required. |
 | Muse Code wrapper | foreground `muse` process | Uses generic start/end activity with explicit model confirmation. |

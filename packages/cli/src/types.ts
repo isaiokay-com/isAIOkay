@@ -48,6 +48,75 @@ export interface StoredEvent {
   recordedAt: number;
 }
 
+export type BillingPeriod = "monthly" | "annual" | "weekly" | "other";
+export type AttributionQuality = "exact" | "inferred" | "estimated" | "unknown";
+export type UsageGranularity = "request" | "message" | "turn" | "session_model";
+export type QuerySource = "main" | "subagent" | "auxiliary" | "background" | "unknown";
+export type QuotaWindowKind = "session" | "daily" | "weekly" | "monthly" | "rolling" | "unknown";
+
+export interface LocalSubscription {
+  id: string;
+  provider: Provider;
+  providerName: string;
+  planLabel: string;
+  planSlug?: string;
+  billingPeriod: BillingPeriod;
+  priceMicros: number | null;
+  currency: string;
+  aggregateConsent: boolean;
+  startedAt: number | null;
+  endedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Prompt-free token evidence queued locally until an authenticated sync. */
+export interface StoredUsageSlice {
+  schemaVersion: 1;
+  id: string;
+  subscriptionId: string;
+  provider: Provider;
+  tool: string;
+  sessionHash: string | null;
+  requestHash: string | null;
+  requestedModel: string | null;
+  reportedModel: string;
+  modelFamily: string | null;
+  modelVersion: string | null;
+  reasoningEffort: string | null;
+  modelVariant: string | null;
+  serviceTier: string | null;
+  querySource: QuerySource;
+  granularity: UsageGranularity;
+  attributionQuality: AttributionQuality;
+  tokenAttributionQuality: AttributionQuality;
+  modelAttributionQuality: AttributionQuality;
+  effortAttributionQuality: AttributionQuality;
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  reportedTotalTokens: number | null;
+  observedAt: number;
+  recordedAt: number;
+}
+
+export interface StoredQuotaSnapshot {
+  schemaVersion: 1;
+  id: string;
+  subscriptionId: string;
+  provider: Provider;
+  quotaScope: string;
+  windowKind: QuotaWindowKind;
+  usedPercent: number | null;
+  remainingPercent: number | null;
+  resetAt: number | null;
+  attributionQuality: AttributionQuality;
+  observedAt: number;
+  recordedAt: number;
+}
+
 export type NormalizationResult =
   | {
       accepted: true;
@@ -73,6 +142,9 @@ export interface LocalConfig {
   hmacSecret: string;
   onboardingCompletedAt: number | null;
   adapters: Partial<Record<Provider, AdapterRegistration>>;
+  subscriptions: LocalSubscription[];
+  /** Default subscription for each harness. Multiple subscriptions may share a provider. */
+  subscriptionBindings: Record<string, string>;
   shellIntegrations: Array<{
     shell: "bash" | "zsh" | "fish" | "powershell";
     path: string;
@@ -83,6 +155,10 @@ export interface LocalState {
   schemaVersion: 1;
   events: StoredEvent[];
   pendingEventIds: string[];
+  usage: StoredUsageSlice[];
+  pendingUsageIds: string[];
+  quota: StoredQuotaSnapshot[];
+  pendingQuotaIds: string[];
   rate: {
     nextAllowedAt: number | null;
     hookReminderShownAt: number[];

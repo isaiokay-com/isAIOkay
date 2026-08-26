@@ -169,13 +169,14 @@ export class FeedbackAllowance extends DurableObject<Env> {
         await this.bindings.DB.batch([
           this.bindings.DB.prepare(
             `insert into feedback_context (
-              id, user_id, installation_id, tracked_item_id, session_hash, tool, raw_model_label,
+              id, user_id, installation_id, subscription_id, tracked_item_id, session_hash, tool, raw_model_label,
               attribution, adapter_version, session_duration_bucket, created_at
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           ).bind(
             contextId,
             userId,
             command.cliContext.installationId,
+            command.cliContext.subscriptionId,
             report.trackedItemId,
             command.cliContext.sessionHash,
             command.cliContext.tool,

@@ -717,7 +717,7 @@ describe("FeedbackAllowance Durable Object", () => {
     const authenticated = await requireCliIdentity(new Request("https://isaiokay.test/api/cli/allowance", {
       headers: { authorization: `Bearer ${token.accessToken}` }
     }), runtime, "allowance:read");
-    expect(authenticated).toMatchObject({ userId, scopes: ["allowance:read", "feedback:write"] });
+  expect(authenticated).toMatchObject({ userId, scopes: ["allowance:read", "feedback:write", "subscriptions:write", "usage:write", "usage:read"] });
 
     const headless = await startDeviceAuthorization(runtime, "headless-cli", now + 3);
     await approveDeviceAuthorization(runtime, authenticated, headless.userCode, now + 4);
@@ -725,7 +725,7 @@ describe("FeedbackAllowance Durable Object", () => {
     const headlessIdentity = await requireCliIdentity(new Request("https://isaiokay.test/api/cli/allowance", {
       headers: { authorization: `Bearer ${headlessToken.accessToken}` }
     }), runtime, "allowance:read");
-    expect(headlessIdentity).toMatchObject({ userId, scopes: ["allowance:read", "feedback:write"] });
+  expect(headlessIdentity).toMatchObject({ userId, scopes: ["allowance:read", "feedback:write", "subscriptions:write", "usage:write", "usage:read"] });
   });
 
   it("does not recreate CLI access after an authenticated account becomes unavailable", async () => {

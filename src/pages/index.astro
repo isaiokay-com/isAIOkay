@@ -2,46 +2,22 @@
 import BaseLayout from "../components/BaseLayout.astro";
 import Header from "../components/Header.astro";
 import Intro from "../components/Intro.astro";
-import RankingShell from "../components/RankingShell.astro";
+import SubscriptionRanking from "../components/SubscriptionRanking.astro";
 import "../styles/landing.css";
 import MethodologyDialog from "../components/MethodologyDialog.astro";
-import FeedbackDialog from "../components/islands/FeedbackDialog";
-import { loadPublicRanking } from "../lib/cache";
-import { compareRecommendedRanking, recommendedRankingValue } from "../lib/ranking";
 import { getRuntimeEnv } from "../lib/runtime";
-import { listActiveAgentOptions } from "../db/repositories";
 import { HOME_PAGE_DESCRIPTION, HOME_PAGE_TITLE } from "../lib/seo";
+import { loadSubscriptionRanking } from "../services/subscription-aggregation";
 
 export const prerender = false;
 
 Astro.response.headers.set("Cache-Control", "public, max-age=60, s-maxage=300");
 
 const params = new URL(Astro.request.url).searchParams;
-const requestedPeriod = params.get("period");
-const period = requestedPeriod === "24h" || requestedPeriod === "7d" ? requestedPeriod : "live";
-const supportedSorts = ["recommended", "result", "usage", "improving", "degrading"] as const;
-const sort = supportedSorts.includes(params.get("sort") as typeof supportedSorts[number]) ? params.get("sort") as typeof supportedSorts[number] : "recommended";
+const requestedPlanPeriod = params.get("planPeriod");
+const planPeriod = requestedPlanPeriod === "30d" || requestedPlanPeriod === "90d" ? requestedPlanPeriod : "7d";
 const env = getRuntimeEnv(Astro.locals);
-const [{ payload }, agents] = await Promise.all([loadPublicRanking(env, period), listActiveAgentOptions(env)]);
-const recommendedValue = (item: typeof payload.items[number]) => recommendedRankingValue(item);
-const sortValue = (item: typeof payload.items[number]) => {
-  switch (sort) {
-    case "result": return item.resultQualityScore;
-    case "usage": return item.usageEfficiencyScore;
-    case "improving": return item.change;
-    case "degrading": return (item.possibleDegradationSinceRelease ? 100 : 0) - item.change;
-    // Report volume is evidence, not a ranking criterion. Recommended blends
-    // community outcome with confidence, preserving the utility's purpose.
-    default: return recommendedValue(item);
-  }
-};
-const items = [...payload.items].sort((a, b) => sort === "recommended"
-  ? compareRecommendedRanking(a, b)
-  : sortValue(b) - sortValue(a) || b.confidence - a.confidence || a.name.localeCompare(b.name));
-const requestedItem = params.get("item");
-const selectedSlug = requestedItem && items.some((item) => item.slug === requestedItem) ? requestedItem : null;
-const requestedFeedback = params.get("feedback");
-const feedbackItem = requestedFeedback && payload.items.find((item) => item.slug === requestedFeedback) ? requestedFeedback : null;
+const subscriptionRanking = await loadSubscriptionRanking(env, planPeriod);
 const accountDeleted = params.get("account") === "deleted";
 const pageTitle = HOME_PAGE_TITLE;
 const pageDescription = HOME_PAGE_DESCRIPTION;
@@ -76,35 +52,35 @@ const structuredData = {
       url: pageUrl,
       isPartOf: { "@id": `${pageUrl}#website` },
       mainEntity: { "@id": `${pageUrl}#dataset` },
-      dateModified: payload.generatedAt,
+      dateModified: subscriptionRanking.generatedAt,
       inLanguage: "en"
     },
     {
       "@type": "Dataset",
       "@id": `${pageUrl}#dataset`,
-      name: "Live AI coding model rankings by developers",
-      description: "Continuously updated AI coding model ratings weighted by recency, confidence, and independent developer participation.",
+      name: "Observed value of AI coding subscriptions",
+      description: "Privacy-thresholded coding-subscription usage measurements, including tokens, model mix, reasoning effort, quota-window evidence, and optional satisfaction.",
       url: pageUrl,
-      dateModified: payload.generatedAt,
+      dateModified: subscriptionRanking.generatedAt,
       creator: { "@id": `${pageUrl}#organization` },
-      variableMeasured: ["Result quality", "Usage efficiency"],
-      measurementTechnique: "Opt-in developer experience ratings"
+      variableMeasured: ["Observed tokens", "Model mix", "Reasoning effort", "API-equivalent value", "Satisfaction"],
+      measurementTechnique: "Opt-in prompt-free CLI telemetry aggregated above a minimum contributor threshold"
     }
   ]
 };
 ---
-<BaseLayout title={pageTitle} description={pageDescription} imageAlt="AI coding model rankings based on recent ratings from real developers" structuredData={structuredData} analytics>
+<BaseLayout title={pageTitle} description={pageDescription} imageAlt="Observed value ranking for AI coding subscriptions" structuredData={structuredData} analytics>
   <div class="landing-page">
-    <Header generatedAt={payload.generatedAt} />
+    <Header generatedAt={subscriptionRanking.generatedAt} />
     <main id="main-content">
       <Intro />
-      {accountDeleted && <section class="account-deleted-notice" role="status"><strong>Your account was deleted.</strong><span>Your identity and access data were removed. Minimal de-identified rating records remain for ranking integrity.</span></section>}
+      {accountDeleted && <section class="account-deleted-notice" role="status"><strong>Your account was deleted.</strong><span>Your identity, subscriptions, usage telemetry, quota snapshots, and access data were removed.</span></section>}
       <section id="cli" class="cli-band" aria-labelledby="cli-title">
         <div class="page-inner cli-inner">
           <div class="cli-copy">
-            <h2 id="cli-title">Report from your terminal.</h2>
-            <p>Install once, connect your tools, and submit only confirmed ratings on Linux, macOS, or Windows.</p>
-            <p class="cli-trust-note">Open source and local-only. No code or prompts collected. <a href="https://github.com/isaiokay-com/isAIOkay" rel="noreferrer" target="_blank">View source ↗</a></p>
+            <h2 id="cli-title">Measure what your plan actually gives you.</h2>
+            <p>Install once, connect each subscription, and track prompt-free token, model, effort, and quota metadata across coding tools.</p>
+            <p class="cli-trust-note">Open source, local parsing, and opt-in aggregation. No code or prompts collected. <a href="https://github.com/isaiokay-com/isAIOkay" rel="noreferrer" target="_blank">View source ↗</a></p>
           </div>
           <div class="cli-setup" role="figure" aria-label="Terminal setup">
             <div class="cli-setup-heading">
@@ -132,7 +108,7 @@ const structuredData = {
                   <code>isaiokay</code>
                   <button type="button" class="cli-copy-button" data-copy-command data-analytics-command="onboarding" aria-label="Copy onboarding command"><span aria-live="polite">Copy</span></button>
                 </div>
-                <p class="cli-step-note"><span aria-hidden="true">#</span>Sign in with GitHub, connect detected coding CLIs, and enable automatic questionnaires.</p>
+                <p class="cli-step-note"><span aria-hidden="true">#</span>Sign in with GitHub, connect detected coding CLIs, and configure the subscriptions you pay for.</p>
                 <p class="cli-step-next" data-cli-next hidden>Copy to reveal next step <span aria-hidden="true">↓</span></p>
               </li>
               <li class="cli-step cli-step--run" data-cli-step>
@@ -141,7 +117,7 @@ const structuredData = {
                   <code>codex</code>
                   <button type="button" class="cli-copy-button" data-copy-command data-analytics-command="example_agent" aria-label="Copy example harness command"><span aria-live="polite">Copy</span></button>
                 </div>
-                <p class="cli-step-note"><span aria-hidden="true">#</span>Keep using Codex, Claude, Cursor, or another harness. Eligible questionnaires open after a session.</p>
+                <p class="cli-step-note"><span aria-hidden="true">#</span>Keep using Codex, Claude, Grok, OpenCode, or another harness. Run <code>isaiokay usage</code> for the model-and-effort breakdown.</p>
               </li>
             </ol>
             <noscript>
@@ -183,9 +159,8 @@ const structuredData = {
           </div>
         </div>
       </section>
-      <RankingShell items={items} selectedSlug={selectedSlug} selectedPeriod={period} selectedSort={sort} />
+      <SubscriptionRanking items={subscriptionRanking.items} period={planPeriod} privacyMinimumContributors={subscriptionRanking.privacyMinimumContributors} />
       <MethodologyDialog />
-      {feedbackItem && <section id="feedback" class="notice" aria-live="polite">Want to rate <strong>{payload.items.find((item) => item.slug === feedbackItem)?.name}</strong>? Sign in with GitHub to report how the model felt and which coding agent you used.</section>}
     </main>
     <footer class="site-footer">
       <div class="page-inner site-footer-inner">
@@ -194,7 +169,6 @@ const structuredData = {
         <a class="footer-author" href="https://x.com/andfkdev" rel="me noreferrer" target="_blank">Built by @andfkdev</a>
       </div>
     </footer>
-    <FeedbackDialog client:load items={payload.items.map((item) => ({ id: item.id, slug: item.slug, name: item.name, providerName: item.providerName }))} agents={agents} initialSlug={feedbackItem} />
   </div>
   <script>
     import { captureAnalytics } from "../lib/analytics";
