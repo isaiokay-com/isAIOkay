@@ -7,7 +7,7 @@ const profile: PublicProfileView = {
   username: "andfk",
   displayName: "Test & Developer",
   avatarUrl: "https://avatars.githubusercontent.com/u/1377735?v=4",
-  xUsername: "andfkdev",
+  xUsername: "andresfyi",
   isPublic: true,
   isOwner: false,
   reportCount: 12,

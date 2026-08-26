@@ -16,7 +16,7 @@
 
 ## About
 
-Hi, I'm [Andrés](https://x.com/andfkdev). I started IsAIokay because coding subscriptions can change without giving subscribers a useful way to compare what they receive. A plan may silently deliver fewer usable sessions, a different model mix, or more low-cost tokens while still looking unchanged on its pricing page.
+Hi, I'm [Andrés](https://x.com/andresfyi). I started IsAIokay because coding subscriptions can change without giving subscribers a useful way to compare what they receive. A plan may silently deliver fewer usable sessions, a different model mix, or more low-cost tokens while still looking unchanged on its pricing page.
 
 The project measures provider-reported token usage, quota movement, model/version, reasoning effort, cache behavior, service tier, and main/subagent/auxiliary activity across real coding sessions. Users can configure several subscriptions and contribute privacy-safe aggregates. Together, those observations can show whether a plan's effective allowance or value appears to increase or decrease over time.
 
